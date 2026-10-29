@@ -29,6 +29,9 @@ const settings = {
       channelName: "QQ",
       updatedAt: 1,
       ready: true,
+      channelEnabled: true,
+      groupPolicyEnabled: true,
+      groupVisibility: "all",
       channelParticipationEnabled: true,
       hostActivation: "mention",
       settings: {
@@ -83,6 +86,17 @@ describe("QQ 群聊设置", () => {
         }),
       ),
     );
+  });
+
+  it("通道关闭时说明原因，仍可保存设置", async () => {
+    vi.mocked(pluginsApi.getSocialTriggerSettings).mockResolvedValue({
+      ...settings,
+      groups: [{ ...settings.groups[0], ready: false, channelEnabled: false }],
+    });
+    render(<SocialTriggerSettingsPanel />);
+    expect(await screen.findByText("QQ 通道未启用。设置可以保存，启用通道后才会接收消息。")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(pluginsApi.saveSocialTriggerSettings).toHaveBeenCalledOnce());
   });
 
   it("按每条消息参与时仍保留不适用的概率设置", async () => {

@@ -221,12 +221,11 @@ export function SocialTriggerSettingsPanel() {
             </small>
           </div>
         </div>
-        {!group?.ready && (
-          <Alert
-            type="warning"
-            showIcon
-            message="该群的 Octop 通道尚未设置为可见全部消息，请先修改通道群聊策略。"
-          />
+        {group && !group.channelEnabled && (
+          <Alert type="warning" showIcon message="QQ 通道未启用。设置可以保存，启用通道后才会接收消息。" />
+        )}
+        {group && (!group.groupPolicyEnabled || group.groupVisibility !== "all") && (
+          <Alert type="warning" showIcon message="群聊策略未开启或可见范围不是全部消息。设置可以保存，修改通道群聊策略后才能自动参与。" />
         )}
         {group && !group.channelParticipationEnabled && (
           <Alert type="warning" showIcon message="该 QQ 通道已关闭自动参与；在通道的群聊策略中开启后，插件规则才会生效。" />

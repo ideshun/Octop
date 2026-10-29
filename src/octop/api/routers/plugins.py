@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
@@ -165,6 +165,9 @@ def _social_trigger_groups(server: OctopServer) -> list[dict[str, Any]]:
                 "channelName": channel.name,
                 "updatedAt": session.updated_at,
                 "ready": bool(channel.enabled and host.enabled and host.visibility == "all"),
+                "channelEnabled": bool(channel.enabled),
+                "groupPolicyEnabled": bool(host.enabled),
+                "groupVisibility": str(host.visibility),
                 "channelParticipationEnabled": raw_group.get("social_trigger_enabled", True) is True,
                 "hostActivation": str(host.activation),
             }
@@ -200,13 +203,11 @@ async def put_social_trigger_settings(
     group = next((g for g in groups if g["channelId"] == body.channelId and g["groupId"] == body.groupId), None)
     if group is None:
         raise OctopError(ErrorCode.NOT_FOUND, "未找到该 QQ 群，请先在群里 @ 机器人", status=404)
-    if body.enabled and body.mode not in ("disabled", "mention_only") and not group["ready"]:
-        raise OctopError(ErrorCode.FORBIDDEN, "请先启用 QQ 群消息策略并允许查看全部消息", status=400)
     policy = body.model_dump(exclude={"enabled", "dryRun", "channelId", "groupId"})
     try:
         await handler.update_settings(enabled=body.enabled, dry_run=body.dryRun, channel_id=body.channelId, group_id=body.groupId, agent_id=group["agentId"], policy=policy)
     except ValueError as exc:
-        raise OctopError(ErrorCode.FORBIDDEN, str(exc), status=400) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok"}
 
 

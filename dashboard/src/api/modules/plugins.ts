@@ -34,6 +34,9 @@ export interface SocialTriggerGroup {
   channelName: string;
   updatedAt: number;
   ready: boolean;
+  channelEnabled: boolean;
+  groupPolicyEnabled: boolean;
+  groupVisibility: string;
   channelParticipationEnabled: boolean;
   hostActivation: string;
   settings: { policy: SocialTriggerPolicy; allowed: boolean; policySource: Record<string, string> };
