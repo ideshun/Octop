@@ -113,8 +113,12 @@ def test_install_url_rejects_non_zip(tmp_path: Path, monkeypatch: pytest.MonkeyP
         def __exit__(self, *args: Any) -> None:
             pass
 
-        def read(self, _size: int) -> bytes:
-            return b"<!DOCTYPE html><html>blob page</html>"
+        def __init__(self) -> None:
+            self._payload = b"<!DOCTYPE html><html>blob page</html>"
+
+        def read(self, size: int) -> bytes:
+            chunk, self._payload = self._payload[:size], self._payload[size:]
+            return chunk
 
     monkeypatch.setattr(
         "octop.infra.agents.plugins.manager.urllib.request.urlopen",
