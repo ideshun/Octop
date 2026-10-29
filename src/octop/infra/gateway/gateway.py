@@ -251,7 +251,7 @@ class Gateway:
         from octop.infra.gateway.channels.telegram_bridge import is_telegram_button_reply
 
         self._channel_manager = ChannelManager(
-            channels={}, control_message_predicate=is_telegram_button_reply
+            channels={}, control_message_predicate=is_telegram_button_reply, inbound_handler=self._plugin_inbound
         )
         self._channel_manager.set_pre_lock_handler(self._preempt_cancel_on_stop)
         await self._channel_manager.start()
@@ -276,6 +276,13 @@ class Gateway:
             await asyncio.gather(*(self._safe_register_channel(row) for row in rows))
 
         logger.info("Gateway booted")
+
+    async def _plugin_inbound(self, channel: Any, message: Any, dispatch: Any) -> bool:
+        from octop_harness.plugins.registry import PluginRegistry
+        for handler in PluginRegistry().all_inbound():
+            if await handler.handle(channel, message, dispatch):
+                return True
+        return False
 
     async def refresh_media_backends(self) -> None:
         """Re-set media backends on all registered channels.
@@ -336,6 +343,15 @@ class Gateway:
         logger.info("Gateway channels reloaded from DB (%d enabled)", len(rows))
 
     async def shutdown(self) -> None:
+        from octop_harness.plugins.registry import PluginRegistry
+        for handler in PluginRegistry().all_inbound():
+            try:
+                handler.close()
+                wait_closed = getattr(handler, "wait_closed", None)
+                if callable(wait_closed):
+                    await wait_closed()
+            except Exception:
+                logger.warning("inbound shutdown callback failed")
         await self._history_backfill.close()
         if self._channel_manager:
             await self._channel_manager.stop()

@@ -2698,6 +2698,8 @@
     "qqQrFailed": "QQ 机器人绑定失败",
     "qqGroupPolicyTitle": "群聊策略",
     "qqGroupContextEnabled": "启用群消息上下文",
+    "qqSocialTriggerEnabled": "允许 QQ 群聊自动参与",
+    "qqSocialTriggerEnabledHelp": "仅允许此通道使用群聊自动参与插件；还需在插件设置中启用参与并配置群、概率和试运行。关闭后按通道原有回复触发方式处理。",
     "qqGroupOwnerCommandsOnly": "仅所有者可在群聊中使用 / 命令",
     "qqGroupOwnerCommandsOnlyDesc": "仅白名单成员可在群内使用 /model、/new、/delete 等 Octop 命令，普通聊天不受影响。关闭群消息上下文不会关闭此保护。",
     "qqGroupOwnerToolsOnly": "仅所有者可在群聊中调用工具",

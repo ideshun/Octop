@@ -9,6 +9,44 @@ export interface PluginConfigField {
   help?: string;
 }
 
+export interface SocialTriggerPolicy {
+  mode: "disabled" | "mention_only" | "smart" | "probability" | "always";
+  replyProbability: number;
+  smartScoreThreshold: number;
+  cooldownSeconds: number;
+  maxPassiveRepliesPerHour: number;
+  maxPassiveRepliesPerDay: number;
+  maxConsecutiveReplies: number;
+  maxBotReplyRatio: number;
+  randomDelayMinMs: number;
+  randomDelayMaxMs: number;
+  debounceMs: number;
+  contextMessages: number;
+  contextTtlSeconds: number;
+  mentionBypassCooldown: boolean;
+  quietHours: { enabled: boolean; start: string; end: string };
+}
+
+export interface SocialTriggerGroup {
+  channelId: string;
+  groupId: string;
+  agentId: string;
+  channelName: string;
+  updatedAt: number;
+  ready: boolean;
+  channelParticipationEnabled: boolean;
+  hostActivation: string;
+  settings: { policy: SocialTriggerPolicy; allowed: boolean; policySource: Record<string, string> };
+}
+
+export interface SocialTriggerSettings {
+  enabled: boolean;
+  dryRun: boolean;
+  timezone: string;
+  recent: { reasonCode: string; event: string } | null;
+  groups: SocialTriggerGroup[];
+}
+
 export interface InstalledPlugin {
   id: string;
   version?: string;
@@ -90,6 +128,22 @@ export interface MarketPlugin {
 }
 
 export const pluginsApi = {
+  getSocialTriggerSettings(): Promise<SocialTriggerSettings> {
+    return request("/plugins/social-trigger/settings");
+  },
+
+  saveSocialTriggerSettings(settings: SocialTriggerPolicy & {
+    enabled: boolean;
+    dryRun: boolean;
+    channelId: string;
+    groupId: string;
+  }): Promise<{ status: string }> {
+    return request("/plugins/social-trigger/settings", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    });
+  },
+
   list(): Promise<InstalledPlugin[]> {
     return request<InstalledPlugin[]>("/plugins");
   },

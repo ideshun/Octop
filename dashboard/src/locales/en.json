@@ -2698,6 +2698,8 @@
     "qqQrFailed": "QQ Bot binding failed",
     "qqGroupPolicyTitle": "Group chat policy",
     "qqGroupContextEnabled": "Enable group message context",
+    "qqSocialTriggerEnabled": "Allow automatic QQ group participation",
+    "qqSocialTriggerEnabledHelp": "Allow the group participation plugin for this channel. Enable it and configure groups, probability, and trial mode in plugin settings. When off, the channel's normal reply policy applies.",
     "qqGroupOwnerCommandsOnly": "Only owners can use / commands in group chats",
     "qqGroupOwnerCommandsOnlyDesc": "Only allowlisted members can use Octop commands such as /model, /new and /delete in groups. Normal chat is unaffected. Turning off group context keeps this protection enabled.",
     "qqGroupOwnerToolsOnly": "Only owners can use tools in group chats",

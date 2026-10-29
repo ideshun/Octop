@@ -395,6 +395,20 @@ describe("<ChannelsPanel /> create-flow default", () => {
     });
   });
 
+  it("saves the QQ group participation switch without changing other policy fields", async () => {
+    await openQqEditDrawer({ enabled: true, visibility: "all", social_trigger_enabled: true, owner_ids: ["owner-1"] });
+    const toggle = await screen.findByLabelText("channels.qqSocialTriggerEnabled");
+    expect(toggle).toBeChecked();
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole("button", { name: "common.save" }));
+    await waitFor(() => {
+      const patch = api.mock.calls.find(([, init]) => init?.method === "PATCH");
+      expect(JSON.parse(String(patch![1]!.body)).config.group_context).toMatchObject({
+        enabled: true, visibility: "all", social_trigger_enabled: false, owner_ids: ["owner-1"],
+      });
+    });
+  });
+
   it("enables tool protection for new QQ channels", async () => {
     render(<ChannelsPanel agentId="ag1" />);
     await userEvent.click((await screen.findAllByText("channels.label_qq"))[0]);

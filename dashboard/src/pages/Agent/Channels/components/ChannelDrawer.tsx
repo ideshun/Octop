@@ -469,6 +469,15 @@ function QqGroupContextPolicyFields({
           </div>
 
           <Form.Item
+            name={["group_context", "social_trigger_enabled"]}
+            label={t("channels.qqSocialTriggerEnabled")}
+            extra={t("channels.qqSocialTriggerEnabledHelp")}
+            valuePropName="checked"
+          >
+            <Switch aria-label={t("channels.qqSocialTriggerEnabled")} />
+          </Form.Item>
+
+          <Form.Item
             name={["group_context", "owner_commands_only"]}
             label={t("channels.qqGroupOwnerCommandsOnly")}
             tooltip={t("channels.qqGroupOwnerCommandsOnlyDesc")}

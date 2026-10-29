@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import mimetypes
 import tempfile
 from pathlib import Path
@@ -43,6 +44,34 @@ _UI_CONTENT_TYPES = {
 
 class PluginInstallBody(BaseModel):
     url: str = Field(..., description="HTTP(S) URL to a plugin ZIP archive")
+
+
+class SocialTriggerQuietHours(BaseModel):
+    enabled: bool
+    start: str = Field(pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
+    end: str = Field(pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
+
+
+class SocialTriggerSettingsBody(BaseModel):
+    enabled: bool
+    dryRun: bool
+    channelId: str
+    groupId: str
+    mode: Literal["disabled", "mention_only", "smart", "probability", "always"]
+    replyProbability: float = Field(ge=0, le=1)
+    smartScoreThreshold: float = Field(ge=0, le=1)
+    cooldownSeconds: int = Field(ge=0, le=86400)
+    maxPassiveRepliesPerHour: int = Field(ge=0, le=10000)
+    maxPassiveRepliesPerDay: int = Field(ge=0, le=100000)
+    maxConsecutiveReplies: int = Field(ge=1, le=100)
+    maxBotReplyRatio: float = Field(ge=0, le=1)
+    randomDelayMinMs: int = Field(ge=0, le=300000)
+    randomDelayMaxMs: int = Field(ge=0, le=300000)
+    debounceMs: int = Field(ge=0, le=60000)
+    contextMessages: int = Field(ge=0, le=100)
+    contextTtlSeconds: int = Field(ge=1, le=86400)
+    mentionBypassCooldown: bool
+    quietHours: SocialTriggerQuietHours
 
 
 class AgentPluginToolBody(BaseModel):
@@ -94,6 +123,91 @@ def _plugin_manager(server: OctopServer) -> PluginManager:
     if mgr is None:
         raise OctopError(ErrorCode.INTERNAL_ERROR, "plugin manager not initialized")
     return mgr
+
+
+def _social_trigger(server: OctopServer) -> Any:
+    from octop_harness.plugins import PluginRegistry
+
+    plugin = PluginRegistry().get("octop-social-trigger")
+    if not plugin or len(plugin.inbound) != 1 or not callable(getattr(plugin.inbound[0], "update_settings", None)):
+        raise OctopError(ErrorCode.NOT_FOUND, "请先启用并加载 QQ 群聊自动参与插件", status=404)
+    return plugin.inbound[0]
+
+
+def _social_trigger_groups(server: OctopServer) -> list[dict[str, Any]]:
+    from octop_gateway.group_context import GroupContextConfig
+
+    if server.services is None:
+        raise OctopError(ErrorCode.INTERNAL_ERROR, "services unavailable")
+    repos = server.services.repos
+    channels = [c for c in repos.channel_repo.list_all() if c.kind == "qq"]
+    sessions = {agent: repos.session_repo.list_by_agent(agent, limit=500) for agent in {c.agent_id for c in channels}}
+    groups = {}
+    for channel in channels:
+        config = json.loads(channel.config_json or "{}")
+        raw_group = config.get("group_context")
+        raw_group = raw_group if isinstance(raw_group, dict) else {}
+        group_config = GroupContextConfig.from_dict(raw_group)
+        for session in sessions[channel.agent_id]:
+            if session.channel_type != "qq" or session.channel_chat_type != "group" or session.channel_id != channel.channel_id:
+                continue
+            group_id = session.channel_subject_id
+            if not group_id:
+                continue
+            key = (channel.channel_id, group_id)
+            if key in groups:
+                continue
+            host = group_config.resolve(group_id)
+            groups[key] = {
+                "channelId": channel.channel_id,
+                "groupId": group_id,
+                "agentId": channel.agent_id,
+                "channelName": channel.name,
+                "updatedAt": session.updated_at,
+                "ready": bool(channel.enabled and host.enabled and host.visibility == "all"),
+                "channelParticipationEnabled": raw_group.get("social_trigger_enabled", True) is True,
+                "hostActivation": str(host.activation),
+            }
+    return sorted(groups.values(), key=lambda item: item["updatedAt"], reverse=True)
+
+
+@router.get("/social-trigger/settings", summary="Read QQ group participation settings")
+async def get_social_trigger_settings(
+    server: OctopServer = Depends(get_server),
+    _user: Any = Depends(require_permission("plugins")),
+) -> dict[str, Any]:
+    handler = _social_trigger(server)
+    groups = _social_trigger_groups(server)
+    for group in groups:
+        group["settings"] = handler.settings_for(group["channelId"], group["groupId"], group["agentId"])
+    return {
+        "enabled": handler.config["enabled"],
+        "dryRun": handler.config["dryRun"],
+        "timezone": handler.config["timezone"],
+        "recent": list(handler.recent)[-1] if handler.recent else None,
+        "groups": groups,
+    }
+
+
+@router.put("/social-trigger/settings", summary="Save QQ group participation settings")
+async def put_social_trigger_settings(
+    body: SocialTriggerSettingsBody,
+    server: OctopServer = Depends(get_server),
+    _user: Any = Depends(require_permission("plugins")),
+) -> dict[str, Any]:
+    handler = _social_trigger(server)
+    groups = _social_trigger_groups(server)
+    group = next((g for g in groups if g["channelId"] == body.channelId and g["groupId"] == body.groupId), None)
+    if group is None:
+        raise OctopError(ErrorCode.NOT_FOUND, "未找到该 QQ 群，请先在群里 @ 机器人", status=404)
+    if body.enabled and body.mode not in ("disabled", "mention_only") and not group["ready"]:
+        raise OctopError(ErrorCode.FORBIDDEN, "请先启用 QQ 群消息策略并允许查看全部消息", status=400)
+    policy = body.model_dump(exclude={"enabled", "dryRun", "channelId", "groupId"})
+    try:
+        await handler.update_settings(enabled=body.enabled, dry_run=body.dryRun, channel_id=body.channelId, group_id=body.groupId, agent_id=group["agentId"], policy=policy)
+    except ValueError as exc:
+        raise OctopError(ErrorCode.FORBIDDEN, str(exc), status=400) from exc
+    return {"status": "ok"}
 
 
 @router.get("", summary="List installed plugins")

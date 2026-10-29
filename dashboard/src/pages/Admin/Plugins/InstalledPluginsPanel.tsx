@@ -51,6 +51,7 @@ import styles from "./index.module.less";
 import { PluginIconView } from "./PluginIconView";
 import { PluginGroupTag } from "./PluginGroupTag";
 import { PluginCardMeta } from "./PluginCardMeta";
+import { SocialTriggerSettingsPanel } from "./SocialTriggerSettings";
 import { notifyPluginsChanged, PLUGINS_CHANGED_EVENT } from "./pluginsEvents";
 
 const { Text, Paragraph } = Typography;
@@ -614,6 +615,10 @@ export function InstalledPluginsPanel() {
                 }
               />
             </div>
+
+            {detail.id === "octop-social-trigger" && detail.enabled !== false && (
+              <SocialTriggerSettingsPanel />
+            )}
 
             <ResourceVisibilityCollapse
               allowOwner={false}
