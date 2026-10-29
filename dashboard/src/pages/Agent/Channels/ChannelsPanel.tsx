@@ -239,7 +239,9 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
           }
           if (
             (row.kind === "discord" || row.kind === "telegram") &&
-            (k === "allowed_channel_ids" || k === "allowed_user_ids") &&
+            (k === "allowed_channel_ids" ||
+              k === "allowed_user_ids" ||
+              k === "allowed_chat_ids") &&
             Array.isArray(v)
           ) {
             formCfg[k] = v.join("\n");
