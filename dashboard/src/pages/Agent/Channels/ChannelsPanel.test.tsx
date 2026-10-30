@@ -306,9 +306,24 @@ describe("<ChannelsPanel /> create-flow default", () => {
     expectBefore(displaySettings, groupPolicy);
   });
 
-  async function openQqEditDrawer(groupContext?: Record<string, unknown>) {
+  const socialSetting = {
+    plugin_id: "octop-social-trigger",
+    name: "social_trigger_enabled",
+    default: true,
+    label: {
+      zh: "channels.qqSocialTriggerEnabled",
+      en: "channels.qqSocialTriggerEnabled",
+    },
+    help: { zh: "help", en: "help" },
+  };
+
+  async function openQqEditDrawer(
+    groupContext?: Record<string, unknown>,
+    getSettings: () => unknown[] = () => [],
+  ) {
     const row = { id: "qq-policy", kind: "qq", name: "qq", enabled: true };
     api.mockImplementation(async (url, init) => {
+      if (url.endsWith("/plugin-settings")) return getSettings();
       if (init?.method === "PATCH") return row;
       if (url.endsWith("/qq-policy")) {
         return {
@@ -396,16 +411,78 @@ describe("<ChannelsPanel /> create-flow default", () => {
   });
 
   it("saves the QQ group participation switch without changing other policy fields", async () => {
-    await openQqEditDrawer({ enabled: true, visibility: "all", social_trigger_enabled: true, owner_ids: ["owner-1"] });
-    const toggle = await screen.findByLabelText("channels.qqSocialTriggerEnabled");
+    await openQqEditDrawer(
+      {
+        enabled: true,
+        visibility: "all",
+        social_trigger_enabled: true,
+        owner_ids: ["owner-1"],
+      },
+      () => [socialSetting],
+    );
+    const toggle = await screen.findByLabelText(
+      "channels.qqSocialTriggerEnabled",
+    );
     expect(toggle).toBeChecked();
     await userEvent.click(toggle);
     await userEvent.click(screen.getByRole("button", { name: "common.save" }));
     await waitFor(() => {
       const patch = api.mock.calls.find(([, init]) => init?.method === "PATCH");
-      expect(JSON.parse(String(patch![1]!.body)).config.group_context).toMatchObject({
-        enabled: true, visibility: "all", social_trigger_enabled: false, owner_ids: ["owner-1"],
+      expect(
+        JSON.parse(String(patch![1]!.body)).config.group_context,
+      ).toMatchObject({
+        enabled: true,
+        visibility: "all",
+        social_trigger_enabled: false,
+        owner_ids: ["owner-1"],
       });
+    });
+  });
+
+  it("shows plugin settings only while loaded and preserves the saved switch when hidden", async () => {
+    let loaded = false;
+    await openQqEditDrawer(
+      { enabled: true, visibility: "all", social_trigger_enabled: false },
+      () => (loaded ? [socialSetting] : []),
+    );
+    expect(
+      screen.queryByLabelText("channels.qqSocialTriggerEnabled"),
+    ).not.toBeInTheDocument();
+    loaded = true;
+    window.dispatchEvent(new Event("octop-plugins-changed"));
+    expect(
+      await screen.findByLabelText("channels.qqSocialTriggerEnabled"),
+    ).not.toBeChecked();
+    loaded = false;
+    window.dispatchEvent(new Event("focus"));
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText("channels.qqSocialTriggerEnabled"),
+      ).not.toBeInTheDocument(),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "common.save" }));
+    await waitFor(() => {
+      const patch = api.mock.calls.find(([, init]) => init?.method === "PATCH");
+      expect(
+        JSON.parse(String(patch![1]!.body)).config.group_context
+          .social_trigger_enabled,
+      ).toBe(false);
+    });
+  });
+
+  it("saves a switch declared by another inbound plugin", async () => {
+    await openQqEditDrawer({ enabled: true }, () => [{
+      ...socialSetting,
+      plugin_id: "another-plugin",
+      name: "another_plugin_enabled",
+      default: false,
+      label: { zh: "Other plugin", en: "Other plugin" },
+    }]);
+    expect(await screen.findByLabelText("Other plugin")).not.toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: "common.save" }));
+    await waitFor(() => {
+      const patch = api.mock.calls.find(([, init]) => init?.method === "PATCH");
+      expect(JSON.parse(String(patch![1]!.body)).config.group_context.another_plugin_enabled).toBe(false);
     });
   });
 

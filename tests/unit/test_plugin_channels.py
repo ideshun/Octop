@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -79,6 +80,37 @@ class _RecordingGateway:
 
 class _FakeChannel:
     channel_type = "acme"
+
+
+def test_inbound_plugin_channel_settings_follow_loaded_registry() -> None:
+    from octop.infra.gateway.plugin_channels import plugin_channel_settings
+
+    setting = {
+        "channel_kind": "qq",
+        "section": "group_context",
+        "name": "social_trigger_enabled",
+        "type": "switch",
+        "default": True,
+        "label": {"zh": "允许参与", "en": "Allow participation"},
+        "help": {"zh": "说明", "en": "Help"},
+    }
+    handler = SimpleNamespace(channel_settings=[setting, {**setting, "name": "enabled"}])
+    plugin = SimpleNamespace(manifest=SimpleNamespace(id="social"), inbound=[handler])
+    plugins: list[Any] = []
+    registry = SimpleNamespace(list_plugins=lambda: plugins)
+    assert plugin_channel_settings(registry) == []
+    plugins.append(plugin)
+    assert plugin_channel_settings(registry) == [
+        {
+            "plugin_id": "social",
+            "name": "social_trigger_enabled",
+            "default": True,
+            "label": setting["label"],
+            "help": setting["help"],
+        }
+    ]
+    plugins.clear()
+    assert plugin_channel_settings(registry) == []
 
 
 def test_apply_plugin_channels_registers_kind() -> None:

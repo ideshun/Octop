@@ -11,3 +11,9 @@
 此功能仅为通道扩展机制，不包含 Octo 协议实现，也不保证第三方插件自身的消息幂等或权限策略。不需要改写 Dashboard 构建产物或修改 ChannelKind 枚举。
 
 通道注册失败会写入插件列表的 registration_error，安装、启用和重载调用返回失败明细；启动时仍隔离坏插件以便其他通道继续工作。
+
+## 为已有 QQ 群聊策略提供开关
+
+入站 hook 的处理器可以在 `channel_settings` 属性声明 QQ 群聊策略开关。Octop 只展示已加载处理器的声明，停用、卸载或加载失败后隐藏；隐藏不会删除已保存的通道配置。当前只支持 `channel_kind="qq"`、`section="group_context"`、`type="switch"`。每个声明需要 `name`（小写字母、数字和下划线，且不能占用宿主字段）、布尔值 `default`、含 `zh`/`en` 字符串的 `label` 和 `help`。同名字段只展示第一个声明。
+
+开关写入通道配置 `group_context.<name>`，处理器可从 QQ 通道的 `plugin_group_settings` 副本读取已保存的布尔值，缺失时应使用声明的默认值。保存开关不会自动启用插件；插件自己的启用和试运行策略仍由插件负责。需要包含该接口的 Octop 和 Gateway 版本，旧宿主不会消费这些声明。
