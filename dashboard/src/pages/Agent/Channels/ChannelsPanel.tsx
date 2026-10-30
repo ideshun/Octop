@@ -291,8 +291,9 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
             Array.isArray(v)
           ) {
             formCfg[k] = v.join("\n");
-          } else if (row.kind === "qq" && k === "group_context") {
-            formCfg[k] = normalizeQqGroupContextConfig(v);
+          } else if (k === "group_context") {
+            formCfg[k] =
+              row.kind === "qq" ? normalizeQqGroupContextConfig(v) : v;
           } else if (
             CHANNEL_FIELDS[row.kind as ChannelKey]?.some(
               (field) => field.name === k && field.type === "switch",

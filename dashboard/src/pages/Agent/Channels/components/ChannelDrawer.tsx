@@ -142,6 +142,7 @@ type QrPhase =
   | { phase: "error"; reason: string };
 
 export interface PluginChannelSetting {
+  channel_kind?: string;
   plugin_id: string;
   name: string;
   default: boolean;
@@ -201,14 +202,28 @@ export function FormItemForField({
   const initialValue = editing ? field.legacyDefaultValue : field.defaultValue;
   if (field.type === "select") {
     return (
-      <Form.Item name={field.name} label={fieldLabel} initialValue={initialValue}>
-        <Select options={field.options?.map((value) => ({ value, label: t(`channels.telegram_option_${value}`) }))} />
+      <Form.Item
+        name={field.name}
+        label={fieldLabel}
+        initialValue={initialValue}
+      >
+        <Select
+          options={field.options?.map((value) => ({
+            value,
+            label: t(`channels.telegram_option_${value}`),
+          }))}
+        />
       </Form.Item>
     );
   }
   if (field.type === "switch") {
     return (
-      <Form.Item name={field.name} label={fieldLabel} initialValue={initialValue} valuePropName="checked">
+      <Form.Item
+        name={field.name}
+        label={fieldLabel}
+        initialValue={initialValue}
+        valuePropName="checked"
+      >
         <Switch />
       </Form.Item>
     );
@@ -322,6 +337,92 @@ function PolicyTagGroup<T extends string>({
         );
       })}
     </div>
+  );
+}
+
+function PluginGroupSettingsFields({
+  fields,
+  kind,
+  form,
+}: {
+  fields: PluginChannelSetting[];
+  kind: string;
+  form: FormInstance<ChannelFormValues>;
+}) {
+  const { t, i18n } = useTranslation();
+  const language = i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en";
+  const enabled =
+    Form.useWatch(["group_context", "enabled"], form) ?? kind === "discord";
+  return (
+    <>
+      {["discord", "feishu", "telegram"].includes(kind) && (
+        <>
+          <Form.Item
+            name={["group_context", "enabled"]}
+            label={t("plugins.participation.sharedGroupPolicy")}
+            valuePropName="checked"
+            initialValue={kind === "discord"}
+          >
+            <Switch />
+          </Form.Item>
+          <Form.Item
+            name={["group_context", "visibility"]}
+            label={t("plugins.participation.visibility")}
+            initialValue={kind === "discord" ? "all" : "auto"}
+            extra={t("plugins.participation.visibilityHelp")}
+          >
+            <Select
+              disabled={!enabled}
+              options={[
+                {
+                  value: "auto",
+                  label: t("plugins.participation.visibilityAuto"),
+                },
+                {
+                  value: "all",
+                  label: t("plugins.participation.visibilityAll"),
+                },
+                {
+                  value: "mention_only",
+                  label: t("plugins.participation.visibilityMention"),
+                },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item
+            name={["group_context", "activation"]}
+            label={t("plugins.participation.nativeActivation")}
+            initialValue="mention"
+          >
+            <Select
+              disabled={!enabled}
+              options={[
+                {
+                  value: "mention",
+                  label: t("plugins.participation.nativeMention"),
+                },
+                {
+                  value: "always",
+                  label: t("plugins.participation.nativeAlways"),
+                },
+              ]}
+            />
+          </Form.Item>
+        </>
+      )}
+      {fields.map((field) => (
+        <Form.Item
+          key={field.name}
+          name={["group_context", field.name]}
+          label={field.label[language]}
+          extra={field.help[language]}
+          valuePropName="checked"
+          initialValue={field.default}
+        >
+          <Switch aria-label={field.label[language]} />
+        </Form.Item>
+      ))}
+    </>
   );
 }
 
@@ -487,9 +588,11 @@ function QqGroupContextPolicyFields({
               label={field.label[language]}
               extra={field.help[language]}
               initialValue={
-                (form.getFieldValue("group_context") as
-                  | Record<string, unknown>
-                  | undefined)?.[field.name] === undefined
+                (
+                  form.getFieldValue("group_context") as
+                    | Record<string, unknown>
+                    | undefined
+                )?.[field.name] === undefined
                   ? field.default
                   : undefined
               }
@@ -1116,11 +1219,22 @@ export function ChannelDrawer({
 
   const mergeDisplayConfig = useCallback(
     (config: Record<string, unknown>) => {
-      const next = { ...config, ...getDisplayConfig() };
+      const next: Record<string, unknown> = {
+        ...config,
+        ...getDisplayConfig(),
+      };
+      const groupPolicy = form.getFieldValue("group_context");
+      if (
+        selectedKind !== "qq" &&
+        groupPolicy &&
+        typeof groupPolicy === "object"
+      ) {
+        next.group_context = { owner_commands_only: false, ...groupPolicy };
+      }
       applyQqChannelSaveConfig(next, selectedKind);
       return next;
     },
-    [getDisplayConfig, selectedKind],
+    [getDisplayConfig, selectedKind, form],
   );
 
   const getQqGroupContextConfig = useCallback(
@@ -1349,17 +1463,8 @@ export function ChannelDrawer({
         }
       }
     }
-    config = {
-      ...config,
-      response_mode:
-        response_mode ?? DEFAULT_CHANNEL_DISPLAY_CONFIG.response_mode,
-      show_thinking:
-        show_thinking ?? DEFAULT_CHANNEL_DISPLAY_CONFIG.show_thinking,
-      show_tool_hints:
-        show_tool_hints ?? DEFAULT_CHANNEL_DISPLAY_CONFIG.show_tool_hints,
-    };
     if (kind === "qq") config.group_context = getQqGroupContextConfig();
-    applyQqChannelSaveConfig(config, kind);
+    config = mergeDisplayConfig(config);
     void (async () => {
       const ok = await onSubmit(kind, kind, config, values.enabled ?? false);
       if (ok) clearFormDraft(draftScope);
@@ -2111,10 +2216,30 @@ export function ChannelDrawer({
           )}
 
           <DisplaySettingsFields />
+          {selectedKind !== "qq" &&
+            pluginChannelSettings.some(
+              (field) =>
+                field.channel_kind === "*" ||
+                field.channel_kind === selectedKind,
+            ) && (
+              <PluginGroupSettingsFields
+                form={form}
+                kind={selectedKind}
+                fields={pluginChannelSettings.filter(
+                  (field) =>
+                    field.channel_kind === "*" ||
+                    field.channel_kind === selectedKind,
+                )}
+              />
+            )}
           {selectedKind === "qq" && (
             <QqGroupContextPolicyFields
               form={form}
-              pluginChannelSettings={pluginChannelSettings}
+              pluginChannelSettings={pluginChannelSettings.filter(
+                (field) =>
+                  (field.channel_kind ?? "qq") === "qq" ||
+                  field.channel_kind === "*",
+              )}
             />
           )}
         </Form>

@@ -14,6 +14,8 @@ export interface SocialTriggerPolicy {
   replyProbability: number;
   smartScoreThreshold: number;
   decisionModelEnabled?: boolean;
+  decisionModelTimeoutMs?: number;
+  decisionModelMaxCallsPerDay?: number;
   cooldownSeconds: number;
   maxPassiveRepliesPerHour: number;
   maxPassiveRepliesPerDay: number;
@@ -28,20 +30,41 @@ export interface SocialTriggerPolicy {
   quietHours: { enabled: boolean; start: string; end: string };
 }
 
-export interface SocialTriggerGroup {
+export type SocialTriggerScope =
+  | "defaults"
+  | "channelTypes"
+  | "channelInstances"
+  | "groups"
+  | "groupAgents";
+
+export interface SocialTriggerPolicySettings {
+  policy: SocialTriggerPolicy;
+  inheritedPolicy: SocialTriggerPolicy;
+  overrides: Partial<SocialTriggerPolicy>;
+  allowed: boolean;
+  policySource: Record<string, string>;
+}
+
+export interface SocialTriggerChannel {
+  channelKind: string;
   channelId: string;
+  channelName: string;
+  agentId: string;
+  settings: SocialTriggerPolicySettings;
+}
+
+export interface SocialTriggerGroup extends SocialTriggerChannel {
   groupId: string;
   groupName?: string | null;
-  agentId: string;
-  channelName: string;
   updatedAt: number;
   ready: boolean;
   channelEnabled: boolean;
+  policyKnown?: boolean;
   groupPolicyEnabled: boolean;
   groupVisibility: string;
   channelParticipationEnabled: boolean;
   hostActivation: string;
-  settings: { policy: SocialTriggerPolicy; allowed: boolean; policySource: Record<string, string> };
+  agentSettings: SocialTriggerPolicySettings;
 }
 
 export interface SocialTriggerSettings {
@@ -50,7 +73,17 @@ export interface SocialTriggerSettings {
   timezone: string;
   decisionModelSupported?: boolean;
   decisionModelConfigured?: boolean | null;
-  recent: { reasonCode: string; event: string; decisionSource?: "model" | "rules" | "policy" } | null;
+  recent: {
+    reasonCode: string;
+    event: string;
+    decisionSource?: "model" | "rules" | "policy";
+  } | null;
+  defaults: SocialTriggerPolicySettings;
+  channels: SocialTriggerChannel[];
+  channelTypes: {
+    channelKind: string;
+    settings: SocialTriggerPolicySettings;
+  }[];
   groups: SocialTriggerGroup[];
 }
 
@@ -139,12 +172,18 @@ export const pluginsApi = {
     return request("/plugins/social-trigger/settings");
   },
 
-  saveSocialTriggerSettings(settings: SocialTriggerPolicy & {
-    enabled: boolean;
-    dryRun: boolean;
-    channelId: string;
-    groupId: string;
-  }): Promise<{ status: string }> {
+  saveSocialTriggerSettings(
+    settings: Partial<SocialTriggerPolicy> & {
+      enabled?: boolean;
+      dryRun?: boolean;
+      channelKind?: string;
+      channelId?: string;
+      groupId?: string;
+      agentId?: string;
+      scope?: SocialTriggerScope;
+      reset?: boolean;
+    },
+  ): Promise<{ status: string }> {
     return request("/plugins/social-trigger/settings", {
       method: "PUT",
       body: JSON.stringify(settings),

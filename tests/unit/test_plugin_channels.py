@@ -103,6 +103,7 @@ def test_inbound_plugin_channel_settings_follow_loaded_registry() -> None:
     assert plugin_channel_settings(registry) == [
         {
             "plugin_id": "social",
+            "channel_kind": "qq",
             "name": "social_trigger_enabled",
             "default": True,
             "label": setting["label"],

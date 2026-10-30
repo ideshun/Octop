@@ -39,6 +39,66 @@ beforeEach(() => {
 });
 
 describe("<ChannelsPanel /> create-flow default", () => {
+  it("saves shared participation switches on plugin channels and filters other channel types", async () => {
+    const row = { id: "o1", kind: "octo", name: "Octo", enabled: true };
+    api.mockImplementation(async (url, init) => {
+      if (url.endsWith("/plugin-kinds"))
+        return [
+          {
+            kind: "octo",
+            label: "Octo",
+            icon: "",
+            intro_url: "",
+            plugin_id: "octop-channel-octo",
+            fields: [],
+          },
+        ];
+      if (url.endsWith("/plugin-settings"))
+        return [
+          {
+            channel_kind: "*",
+            name: "social_trigger_enabled",
+            default: true,
+            label: { zh: "自动参与", en: "Participation" },
+            help: { zh: "", en: "" },
+          },
+          {
+            channel_kind: "qq",
+            name: "qq_only",
+            default: true,
+            label: { zh: "仅 QQ", en: "QQ only" },
+            help: { zh: "", en: "" },
+          },
+        ];
+      if (init?.method === "PATCH") return row;
+      if (url.endsWith("/o1"))
+        return {
+          ...row,
+          config: {
+            group_context: { social_trigger_enabled: false, history_limit: 12 },
+          },
+        };
+      return [row];
+    });
+    render(<ChannelsPanel agentId="ag1" />);
+    await userEvent.click((await screen.findAllByText("Octo"))[0]);
+    const toggle = await screen.findByLabelText("Participation");
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByLabelText("QQ only")).not.toBeInTheDocument();
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole("button", { name: "common.save" }));
+    await waitFor(() => {
+      const patch = api.mock.calls.find(([, init]) => init?.method === "PATCH");
+      expect(patch).toBeDefined();
+      expect(
+        JSON.parse(String(patch![1]!.body)).config.group_context,
+      ).toMatchObject({
+        social_trigger_enabled: true,
+        history_limit: 12,
+      });
+    });
+  });
+
   it.each([undefined, false, true])(
     "preserves plugin switch values and defaults (%s)",
     async (saved) => {
@@ -471,18 +531,23 @@ describe("<ChannelsPanel /> create-flow default", () => {
   });
 
   it("saves a switch declared by another inbound plugin", async () => {
-    await openQqEditDrawer({ enabled: true }, () => [{
-      ...socialSetting,
-      plugin_id: "another-plugin",
-      name: "another_plugin_enabled",
-      default: false,
-      label: { zh: "Other plugin", en: "Other plugin" },
-    }]);
+    await openQqEditDrawer({ enabled: true }, () => [
+      {
+        ...socialSetting,
+        plugin_id: "another-plugin",
+        name: "another_plugin_enabled",
+        default: false,
+        label: { zh: "Other plugin", en: "Other plugin" },
+      },
+    ]);
     expect(await screen.findByLabelText("Other plugin")).not.toBeChecked();
     await userEvent.click(screen.getByRole("button", { name: "common.save" }));
     await waitFor(() => {
       const patch = api.mock.calls.find(([, init]) => init?.method === "PATCH");
-      expect(JSON.parse(String(patch![1]!.body)).config.group_context.another_plugin_enabled).toBe(false);
+      expect(
+        JSON.parse(String(patch![1]!.body)).config.group_context
+          .another_plugin_enabled,
+      ).toBe(false);
     });
   });
 

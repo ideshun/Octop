@@ -617,9 +617,8 @@ export function InstalledPluginsPanel() {
               />
             </div>
 
-            {detail.id === "octop-social-trigger" && detail.enabled !== false && (
-              <SocialTriggerSettingsPanel />
-            )}
+            {detail.id === "octop-social-trigger" &&
+              detail.enabled !== false && <SocialTriggerSettingsPanel />}
 
             <ResourceVisibilityCollapse
               allowOwner={false}

@@ -23,7 +23,7 @@ async def test_social_trigger_settings_permissions_and_save(env_admin_alice):
     client, _server, admin, alice = env_admin_alice
     handler = SimpleNamespace(
         config={"enabled": True, "dryRun": True, "timezone": "Asia/Shanghai"},
-        settings_for=lambda *_: {"policy": {"mode": "smart"}, "allowed": True},
+        settings_for=lambda *_, **__: {"policy": {"mode": "smart"}, "allowed": True},
         recent=[],
         update_settings=AsyncMock(),
         bind_decision_scorer=lambda _: None,
@@ -170,3 +170,88 @@ def test_social_trigger_groups_distinguishes_disabled_channel_and_group_policy()
     assert groups[0]["channelEnabled"] is False
     assert groups[0]["groupPolicyEnabled"] is True
     assert groups[0]["groupVisibility"] == "all"
+
+
+@pytest.mark.asyncio
+async def test_policy_scopes_reject_cross_channel_and_agent_spoofing(env_admin_alice):
+    client, _server, admin, _alice = env_admin_alice
+    handler = SimpleNamespace(update_settings=AsyncMock(), bind_decision_scorer=lambda _: None)
+    group = {"channelKind": "octo", "channelId": "channel", "groupId": "same", "agentId": "expert"}
+    payload = {
+        "channelKind": "octo",
+        "channelId": "channel",
+        "groupId": "same",
+        "agentId": "expert",
+        "scope": "groups",
+        "cooldownSeconds": 60,
+    }
+    with (
+        patch("octop.api.routers.plugins._social_trigger", return_value=handler),
+        patch("octop.api.routers.plugins._social_trigger_groups", return_value=[group]),
+        patch("octop.api.routers.plugins._social_trigger_channels", return_value=[group]),
+    ):
+        assert (
+            await client.put("/api/plugins/social-trigger/settings", headers=admin, json=payload)
+        ).status_code == 200
+        assert handler.update_settings.await_args.kwargs["platform"] == "octo"
+        assert handler.update_settings.await_args.kwargs["policy"] == {"cooldownSeconds": 60}
+        for patch_body in ({"channelKind": "qq"}, {"agentId": "other"}, {"channelId": "other"}):
+            assert (
+                await client.put(
+                    "/api/plugins/social-trigger/settings",
+                    headers=admin,
+                    json={**payload, **patch_body},
+                )
+            ).status_code == 404
+        assert (
+            await client.put(
+                "/api/plugins/social-trigger/settings",
+                headers=admin,
+                json={"scope": "defaults", "reset": True},
+            )
+        ).status_code == 200
+        assert handler.update_settings.await_args.kwargs["reset"] is True
+        assert handler.update_settings.await_args.kwargs["policy"] == {}
+
+
+def test_catalog_keeps_same_group_ids_in_separate_platforms_and_uses_live_policy():
+    from octop_gateway.group_context import GroupContextConfig, GroupContextManager
+
+    from octop.infra.agents.plugins.social_trigger import groups
+
+    channels = [
+        SimpleNamespace(
+            kind=kind, channel_id=kind, agent_id="expert", name=kind, enabled=True, config_json="{}"
+        )
+        for kind in ("qq", "octo")
+    ]
+    sessions = [
+        SimpleNamespace(
+            channel_type=kind,
+            channel_id=kind,
+            channel_chat_type="group",
+            channel_subject_id="same",
+            updated_at=1,
+        )
+        for kind in ("qq", "octo")
+    ]
+    manager = GroupContextManager(GroupContextConfig(enabled=True, visibility="all"))
+    server = SimpleNamespace(
+        services=SimpleNamespace(
+            repos=SimpleNamespace(
+                channel_repo=SimpleNamespace(list_all=lambda: channels),
+                session_repo=SimpleNamespace(list_by_agent=lambda *a, **k: sessions),
+            )
+        ),
+        app_runtime=SimpleNamespace(
+            gateway=SimpleNamespace(
+                channel_manager=SimpleNamespace(
+                    get_channel=lambda _: SimpleNamespace(group_context_manager=manager)
+                )
+            )
+        ),
+    )
+    result = groups(server)
+    assert {item["channelKind"] for item in result} == {"qq", "octo"}
+    assert len(result) == 2
+    assert all(item["ready"] for item in result)

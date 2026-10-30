@@ -28,7 +28,7 @@ _ERRORS: dict[str, str] = {}
 _KIND_ERRORS: dict[str, tuple[str, str]] = {}
 _CURRENT_ERRORS: dict[str, str] = {}
 
-_QQ_GROUP_RESERVED = frozenset(
+_GROUP_RESERVED = frozenset(
     {
         "enabled",
         "visibility",
@@ -46,7 +46,7 @@ _QQ_GROUP_RESERVED = frozenset(
 
 
 def plugin_channel_settings(registry: Any) -> list[dict[str, Any]]:
-    """Expose switch declarations from loaded inbound handlers for QQ group policy."""
+    """Expose scoped group switches; '*' applies to every channel adapter."""
     settings: list[dict[str, Any]] = []
     seen: set[str] = set()
     for plugin in registry.list_plugins():
@@ -58,14 +58,16 @@ def plugin_channel_settings(registry: Any) -> list[dict[str, Any]]:
                 if not isinstance(field, dict):
                     continue
                 name = field.get("name")
+                kind = field.get("channel_kind")
                 label, help_text = field.get("label"), field.get("help")
                 if (
-                    field.get("channel_kind") != "qq"
+                    not isinstance(kind, str)
+                    or (kind != "*" and not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", kind))
                     or field.get("section") != "group_context"
                     or field.get("type") != "switch"
                     or not isinstance(name, str)
                     or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", name)
-                    or name in _QQ_GROUP_RESERVED
+                    or name in _GROUP_RESERVED
                     or name in seen
                     or not isinstance(field.get("default"), bool)
                     or not isinstance(label, dict)
@@ -80,6 +82,7 @@ def plugin_channel_settings(registry: Any) -> list[dict[str, Any]]:
                 settings.append(
                     {
                         "plugin_id": plugin.manifest.id,
+                        "channel_kind": kind,
                         "name": name,
                         "default": field["default"],
                         "label": {key: label[key] for key in ("zh", "en")},

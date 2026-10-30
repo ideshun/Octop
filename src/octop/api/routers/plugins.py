@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import mimetypes
 import tempfile
-import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -24,16 +21,21 @@ from octop.infra.agents.plugins.plugin_tool_defaults import (
     merge_plugins_enabled_settings,
     merge_plugins_tool_settings,
 )
+from octop.infra.agents.plugins.social_trigger import (
+    channels as _social_trigger_channels,
+)
+from octop.infra.agents.plugins.social_trigger import (
+    groups as _social_trigger_groups,
+)
+from octop.infra.agents.plugins.social_trigger import (
+    load_group_names as _load_social_trigger_group_names,
+)
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.server import OctopServer
 
 router = APIRouter(prefix="/plugins", tags=["plugins"])
 logger = logging.getLogger(__name__)
 
-_SOCIAL_TRIGGER_GROUP_NAME_CACHE: dict[tuple[str, str], tuple[float, str | None]] = {}
-_SOCIAL_TRIGGER_GROUP_NAME_TTL = 12 * 60 * 60
-_SOCIAL_TRIGGER_GROUP_NAME_FAILURE_TTL = 10 * 60
-_SOCIAL_TRIGGER_GROUP_NAME_LOOKUP_LIMIT = 20
 
 _UI_CONTENT_TYPES = {
     ".js": "text/javascript; charset=utf-8",
@@ -62,26 +64,34 @@ class SocialTriggerQuietHours(BaseModel):
 
 
 class SocialTriggerSettingsBody(BaseModel):
-    enabled: bool
-    dryRun: bool
-    channelId: str
-    groupId: str
-    mode: Literal["disabled", "mention_only", "smart", "probability", "always"]
-    replyProbability: float = Field(ge=0, le=1)
-    smartScoreThreshold: float = Field(ge=0, le=1)
+    enabled: bool | None = None
+    dryRun: bool | None = None
+    channelKind: str = "qq"
+    channelId: str = ""
+    groupId: str = ""
+    agentId: str = ""
+    scope: Literal["defaults", "channelTypes", "channelInstances", "groups", "groupAgents"] = (
+        "groupAgents"
+    )
+    reset: bool = False
+    mode: Literal["disabled", "mention_only", "smart", "probability", "always"] | None = None
+    replyProbability: float | None = Field(default=None, ge=0, le=1)
+    smartScoreThreshold: float | None = Field(default=None, ge=0, le=1)
     decisionModelEnabled: bool | None = None
-    cooldownSeconds: int = Field(ge=0, le=86400)
-    maxPassiveRepliesPerHour: int = Field(ge=0, le=10000)
-    maxPassiveRepliesPerDay: int = Field(ge=0, le=100000)
-    maxConsecutiveReplies: int = Field(ge=1, le=100)
-    maxBotReplyRatio: float = Field(ge=0, le=1)
-    randomDelayMinMs: int = Field(ge=0, le=300000)
-    randomDelayMaxMs: int = Field(ge=0, le=300000)
-    debounceMs: int = Field(ge=0, le=60000)
-    contextMessages: int = Field(ge=0, le=100)
-    contextTtlSeconds: int = Field(ge=1, le=86400)
-    mentionBypassCooldown: bool
-    quietHours: SocialTriggerQuietHours
+    decisionModelTimeoutMs: int | None = Field(default=None, ge=0, le=3000)
+    decisionModelMaxCallsPerDay: int | None = Field(default=None, ge=0, le=100000)
+    cooldownSeconds: int | None = Field(default=None, ge=0, le=86400)
+    maxPassiveRepliesPerHour: int | None = Field(default=None, ge=0, le=10000)
+    maxPassiveRepliesPerDay: int | None = Field(default=None, ge=0, le=100000)
+    maxConsecutiveReplies: int | None = Field(default=None, ge=1, le=100)
+    maxBotReplyRatio: float | None = Field(default=None, ge=0, le=1)
+    randomDelayMinMs: int | None = Field(default=None, ge=0, le=300000)
+    randomDelayMaxMs: int | None = Field(default=None, ge=0, le=300000)
+    debounceMs: int | None = Field(default=None, ge=0, le=60000)
+    contextMessages: int | None = Field(default=None, ge=0, le=100)
+    contextTtlSeconds: int | None = Field(default=None, ge=1, le=86400)
+    mentionBypassCooldown: bool | None = None
+    quietHours: SocialTriggerQuietHours | None = None
 
 
 class AgentPluginToolBody(BaseModel):
@@ -144,105 +154,17 @@ def _social_trigger(server: OctopServer) -> Any:
         or len(plugin.inbound) != 1
         or not callable(getattr(plugin.inbound[0], "update_settings", None))
     ):
-        raise OctopError(ErrorCode.NOT_FOUND, "请先启用并加载 QQ 群聊自动参与插件", status=404)
+        raise OctopError(ErrorCode.NOT_FOUND, "请先启用并加载群聊自动参与插件", status=404)
+    if getattr(plugin.inbound[0], "settings_version", 1) < 2:
+        raise OctopError(
+            ErrorCode.NOT_FOUND, "请更新群聊自动参与插件后重载，以使用跨通道设置", status=409
+        )
     return plugin.inbound[0]
 
 
-def _social_trigger_groups(server: OctopServer) -> list[dict[str, Any]]:
-    from octop_gateway.group_context import GroupContextConfig
-
-    if server.services is None:
-        raise OctopError(ErrorCode.INTERNAL_ERROR, "services unavailable")
-    repos = server.services.repos
-    channels = [c for c in repos.channel_repo.list_all() if c.kind == "qq"]
-    sessions = {
-        agent: repos.session_repo.list_by_agent(agent, limit=500)
-        for agent in {c.agent_id for c in channels}
-    }
-    groups = {}
-    for channel in channels:
-        config = json.loads(channel.config_json or "{}")
-        raw_group = config.get("group_context")
-        raw_group = raw_group if isinstance(raw_group, dict) else {}
-        group_config = GroupContextConfig.from_dict(raw_group)
-        for session in sessions[channel.agent_id]:
-            if (
-                session.channel_type != "qq"
-                or session.channel_chat_type != "group"
-                or session.channel_id != channel.channel_id
-            ):
-                continue
-            group_id = session.channel_subject_id
-            if not group_id:
-                continue
-            key = (channel.channel_id, group_id)
-            if key in groups:
-                continue
-            host = group_config.resolve(group_id)
-            groups[key] = {
-                "channelId": channel.channel_id,
-                "groupId": group_id,
-                "agentId": channel.agent_id,
-                "channelName": channel.name,
-                "updatedAt": session.updated_at,
-                "ready": bool(channel.enabled and host.enabled and host.visibility == "all"),
-                "channelEnabled": bool(channel.enabled),
-                "groupPolicyEnabled": bool(host.enabled),
-                "groupVisibility": str(host.visibility),
-                "channelParticipationEnabled": raw_group.get("social_trigger_enabled", True)
-                is True,
-                "hostActivation": str(host.activation),
-            }
-    return sorted(groups.values(), key=lambda item: item["updatedAt"], reverse=True)
-
-
-async def _load_social_trigger_group_names(
-    server: OctopServer, groups: list[dict[str, Any]]
-) -> None:
-    runtime = server.app_runtime
-    manager = runtime.gateway.channel_manager if runtime is not None else None
-    get_channel = getattr(manager, "get_channel", None)
-    if not callable(get_channel):
-        return
-
-    now = time.monotonic()
-    pending: list[tuple[dict[str, Any], tuple[str, str]]] = []
-    for group in groups:
-        key = (group["channelId"], group["groupId"])
-        cached = _SOCIAL_TRIGGER_GROUP_NAME_CACHE.get(key)
-        if cached and cached[0] > now:
-            group["groupName"] = cached[1]
-            continue
-        group["groupName"] = None
-        if len(pending) < _SOCIAL_TRIGGER_GROUP_NAME_LOOKUP_LIMIT:
-            pending.append((group, key))
-
-    semaphore = asyncio.Semaphore(5)
-
-    async def lookup(group: dict[str, Any], key: tuple[str, str]) -> None:
-        channel = get_channel(group["channelId"])
-        get_group_info = getattr(channel, "get_group_info", None)
-        if not callable(get_group_info):
-            return
-        try:
-            async with semaphore:
-                info = await asyncio.wait_for(get_group_info(group["groupId"]), timeout=3)
-            name = info.get("group_name") if isinstance(info, dict) else None
-            name = name.strip() if isinstance(name, str) else None
-            ttl = _SOCIAL_TRIGGER_GROUP_NAME_TTL if name else _SOCIAL_TRIGGER_GROUP_NAME_FAILURE_TTL
-            _SOCIAL_TRIGGER_GROUP_NAME_CACHE[key] = (time.monotonic() + ttl, name)
-            group["groupName"] = name
-        except Exception:
-            _SOCIAL_TRIGGER_GROUP_NAME_CACHE[key] = (
-                time.monotonic() + _SOCIAL_TRIGGER_GROUP_NAME_FAILURE_TTL,
-                None,
-            )
-            logger.debug("QQ group name lookup unavailable for channel %s", group["channelId"])
-
-    await asyncio.gather(*(lookup(group, key) for group, key in pending))
-
-
-@router.get("/social-trigger/settings", summary="Read QQ group participation settings")
+@router.get(
+    "/social-trigger/settings", summary="Read group participation settings and inherited policies"
+)
 async def get_social_trigger_settings(
     server: OctopServer = Depends(get_server),
     _user: Any = Depends(require_permission("plugins")),
@@ -252,8 +174,30 @@ async def get_social_trigger_settings(
     await _load_social_trigger_group_names(server, groups)
     for group in groups:
         group["settings"] = handler.settings_for(
-            group["channelId"], group["groupId"], group["agentId"]
+            group["channelId"],
+            group["groupId"],
+            group["agentId"],
+            platform=group.get("channelKind", "qq"),
+            scope="groups",
         )
+        group["agentSettings"] = handler.settings_for(
+            group["channelId"],
+            group["groupId"],
+            group["agentId"],
+            platform=group.get("channelKind", "qq"),
+            scope="groupAgents",
+        )
+    channels = _social_trigger_channels(server)
+    for channel in channels:
+        channel["settings"] = handler.settings_for(
+            channel["channelId"],
+            platform=channel["channelKind"],
+            scope="channelInstances",
+        )
+    kinds = sorted(
+        {channel["channelKind"] for channel in channels}
+        | {g.get("channelKind", "qq") for g in groups}
+    )
     decision_configured = None
     try:
         if server.app_runtime is not None:
@@ -268,10 +212,21 @@ async def get_social_trigger_settings(
         "decisionModelConfigured": decision_configured,
         "recent": list(handler.recent)[-1] if handler.recent else None,
         "groups": groups,
+        "defaults": handler.settings_for(scope="defaults"),
+        "channels": channels,
+        "channelTypes": [
+            {
+                "channelKind": kind,
+                "settings": handler.settings_for(platform=kind, scope="channelTypes"),
+            }
+            for kind in kinds
+        ],
     }
 
 
-@router.put("/social-trigger/settings", summary="Save QQ group participation settings")
+@router.put(
+    "/social-trigger/settings", summary="Save or reset one group participation policy scope"
+)
 async def put_social_trigger_settings(
     body: SocialTriggerSettingsBody,
     server: OctopServer = Depends(get_server),
@@ -279,24 +234,58 @@ async def put_social_trigger_settings(
 ) -> dict[str, Any]:
     handler = _social_trigger(server)
     groups = _social_trigger_groups(server)
+    channels = _social_trigger_channels(server)
     group = next(
-        (g for g in groups if g["channelId"] == body.channelId and g["groupId"] == body.groupId),
+        (
+            g
+            for g in groups
+            if g["channelId"] == body.channelId
+            and g["groupId"] == body.groupId
+            and g.get("channelKind", "qq") == body.channelKind
+            and (not body.agentId or g["agentId"] == body.agentId)
+        ),
         None,
     )
-    if group is None:
-        raise OctopError(ErrorCode.NOT_FOUND, "未找到该 QQ 群，请先在群里 @ 机器人", status=404)
+    if body.scope in ("groups", "groupAgents") and group is None:
+        raise OctopError(ErrorCode.NOT_FOUND, "未找到该群聊，请先在群里与机器人对话", status=404)
+    if body.scope == "channelInstances" and not any(
+        c["channelId"] == body.channelId and c["channelKind"] == body.channelKind for c in channels
+    ):
+        raise OctopError(ErrorCode.NOT_FOUND, "未找到该通道", status=404)
+    if body.scope == "channelTypes" and body.channelKind not in {
+        c["channelKind"] for c in channels
+    }:
+        raise OctopError(ErrorCode.NOT_FOUND, "未找到该通道类型", status=404)
     policy = body.model_dump(
-        exclude={"enabled", "dryRun", "channelId", "groupId"}, exclude_none=True
+        exclude={
+            "enabled",
+            "dryRun",
+            "channelKind",
+            "channelId",
+            "groupId",
+            "agentId",
+            "scope",
+            "reset",
+        },
+        exclude_none=True,
     )
     if not callable(getattr(handler, "bind_decision_scorer", None)):
-        policy.pop("decisionModelEnabled", None)
+        for field in (
+            "decisionModelEnabled",
+            "decisionModelTimeoutMs",
+            "decisionModelMaxCallsPerDay",
+        ):
+            policy.pop(field, None)
     try:
         await handler.update_settings(
             enabled=body.enabled,
             dry_run=body.dryRun,
+            platform=body.channelKind,
             channel_id=body.channelId,
             group_id=body.groupId,
-            agent_id=group["agentId"],
+            agent_id=group["agentId"] if group else body.agentId,
+            scope=body.scope,
+            reset=body.reset,
             policy=policy,
         )
     except ValueError as exc:

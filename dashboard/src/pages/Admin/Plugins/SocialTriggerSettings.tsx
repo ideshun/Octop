@@ -2,112 +2,162 @@ import { useEffect, useState } from "react";
 import {
   Alert,
   Button,
+  Collapse,
   Form,
   Input,
   InputNumber,
+  Modal,
+  Popconfirm,
   Select,
   Space,
   Spin,
   Switch,
 } from "antd";
+import { useTranslation } from "react-i18next";
 import { message } from "@/utils/antdMessage";
 import {
   pluginsApi,
-  type SocialTriggerGroup,
+  type SocialTriggerPolicy,
   type SocialTriggerSettings,
+  type SocialTriggerScope,
 } from "../../../api/modules/plugins";
 
-type FormValues = {
-  enabled: boolean;
-  dryRun: boolean;
-  mode: "disabled" | "mention_only" | "smart" | "probability" | "always";
-  replyPercent: number;
-  smartPercent: number;
-  decisionModelEnabled: boolean;
-  cooldownSeconds: number;
-  maxPassiveRepliesPerHour: number;
-  maxPassiveRepliesPerDay: number;
-  maxConsecutiveReplies: number;
-  botRatioPercent: number;
-  delayMin: number;
-  delayMax: number;
-  debounceMs: number;
-  contextMessages: number;
-  contextTtlSeconds: number;
-  mentionBypassCooldown: boolean;
-  quietHours: { enabled: boolean; start: string; end: string };
+type Values = SocialTriggerPolicy & { enabled: boolean; dryRun: boolean };
+const scopes: SocialTriggerScope[] = [
+  "defaults",
+  "channelTypes",
+  "channelInstances",
+  "groups",
+  "groupAgents",
+];
+const selectionStorageKey = "octop:social-trigger-selection";
+type Selection = {
+  scope: SocialTriggerScope;
+  kind: string;
+  channelId: string;
+  groupId: string;
+  agentId: string;
 };
 
-const groupKey = (group: SocialTriggerGroup) =>
-  JSON.stringify([group.channelId, group.groupId]);
-const groupLabel = (group: SocialTriggerGroup) => {
-  const suffix = group.groupId.slice(-6);
-  return group.groupName ? `${group.groupName}（${suffix}）` : suffix;
-};
-const reasonText: Record<string, string> = {
-  dry_run_would_trigger: "试运行：符合条件，本次没有发送",
-  eligible: "符合条件，准备回复",
-  reply_sent: "已发送回复",
-  probability: "概率抽样未命中",
-  score_below_threshold: "聊天内容相关度不足",
-  hourly_limit: "已达到每小时回复上限",
-  daily_limit: "已达到每天回复上限",
-  quiet_hours: "当前处于静默时段",
-  mention_only: "当前只响应 @",
-  permission_downgraded: "群消息可见权限不足",
-  sender_identity_unknown: "无法确认发送者身份",
-  bot_message: "发送者是机器人",
-  group_not_allowed: "群不在允许范围内",
-  duplicate: "重复消息",
-  reply_pending: "上一条回复结果尚未确认",
-  cooldown: "尚未超过回复间隔",
-  bot_reply_ratio: "机器人发言占比已达上限",
-  consecutive_limit: "已达到连续回复上限",
-  decision_model_unavailable: "决策模型不可用，已切换到本地规则",
-  decision_model_budget: "决策模型调用已达上限，已切换到本地规则",
-  reply_cancelled: "待发送的回复已取消",
-  delivery_unknown: "发送结果不明确，需检查日志",
-};
-const sourceText: Record<string, string> = {
-  defaults: "全局默认",
-  channelTypes: "通道类型",
-  channelInstances: "通道",
-  groups: "群",
-  groupAgents: "群内专家",
+function restoreSelection(result: SocialTriggerSettings): Selection {
+  const first = result.groups[0] ?? result.channels[0];
+  const fallback: Selection = {
+    scope: "defaults",
+    kind: first?.channelKind ?? "",
+    channelId: first?.channelId ?? "",
+    groupId: result.groups[0]?.groupId ?? "",
+    agentId: first?.agentId ?? "",
+  };
+  try {
+    const saved: Partial<Selection> | null = JSON.parse(
+      localStorage.getItem(selectionStorageKey) ?? "null",
+    );
+    if (!saved?.scope || !scopes.includes(saved.scope)) return fallback;
+    const kind = result.channelTypes.find(
+      (item) => item.channelKind === saved.kind,
+    );
+    const channel = result.channels.find(
+      (item) =>
+        item.channelKind === saved.kind && item.channelId === saved.channelId,
+    );
+    const matchingGroups = result.groups.filter(
+      (item) =>
+        item.channelKind === saved.kind &&
+        item.channelId === saved.channelId &&
+        item.groupId === saved.groupId,
+    );
+    const group =
+      matchingGroups.find((item) => item.agentId === saved.agentId) ??
+      (saved.scope === "groupAgents" ? undefined : matchingGroups[0]);
+    const valid = {
+      defaults: true,
+      channelTypes: !!kind,
+      channelInstances: !!channel,
+      groups: !!group,
+      groupAgents: !!group,
+    }[saved.scope];
+    if (!valid) return fallback;
+    const target =
+      group ??
+      channel ??
+      result.channels.find((item) => item.channelKind === kind?.channelKind) ??
+      first;
+    const viewedGroup =
+      group ??
+      result.groups.find(
+        (item) =>
+          item.channelKind === target?.channelKind &&
+          item.channelId === target?.channelId,
+      );
+    return {
+      scope: saved.scope,
+      kind: target?.channelKind ?? "",
+      channelId: target?.channelId ?? "",
+      groupId: viewedGroup?.groupId ?? "",
+      agentId: viewedGroup?.agentId ?? target?.agentId ?? "",
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+const channelLabel = (kind: string) =>
+  ({
+    qq: "QQ",
+    octo: "Octo",
+    discord: "Discord",
+    feishu: "飞书 / Lark",
+    telegram: "Telegram",
+  })[kind] || kind;
+const grid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
+  gap: "0 16px",
 };
 
 export function SocialTriggerSettingsPanel() {
-  const [form] = Form.useForm<FormValues>();
+  const { t } = useTranslation();
+  const text = (key: string, values?: Record<string, unknown>) =>
+    t(`plugins.participation.${key}`, values);
+  const [form] = Form.useForm<Values>();
   const [data, setData] = useState<SocialTriggerSettings | null>(null);
-  const [group, setGroup] = useState<SocialTriggerGroup | null>(null);
+  const [scope, setScope] = useState<SocialTriggerScope>("defaults");
+  const [kind, setKind] = useState("");
+  const [channelId, setChannelId] = useState("");
+  const [groupId, setGroupId] = useState("");
+  const [agentId, setAgentId] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [dirty, setDirty] = useState(false);
   const mode = Form.useWatch("mode", form);
   const dryRun = Form.useWatch("dryRun", form);
-
-  const choose = (item: SocialTriggerGroup) => {
-    setGroup(item);
-    const policy = item.settings.policy;
-    form.setFieldsValue({
-      mode: policy.mode,
-      replyPercent: Math.round(policy.replyProbability * 10000) / 100,
-      smartPercent: Math.round(policy.smartScoreThreshold * 10000) / 100,
-      decisionModelEnabled: policy.decisionModelEnabled ?? true,
-      cooldownSeconds: policy.cooldownSeconds,
-      maxPassiveRepliesPerHour: policy.maxPassiveRepliesPerHour,
-      maxPassiveRepliesPerDay: policy.maxPassiveRepliesPerDay,
-      maxConsecutiveReplies: policy.maxConsecutiveReplies,
-      botRatioPercent: Math.round(policy.maxBotReplyRatio * 10000) / 100,
-      delayMin: policy.randomDelayMinMs / 1000,
-      delayMax: policy.randomDelayMaxMs / 1000,
-      debounceMs: policy.debounceMs,
-      contextMessages: policy.contextMessages,
-      contextTtlSeconds: policy.contextTtlSeconds,
-      mentionBypassCooldown: policy.mentionBypassCooldown,
-      quietHours: policy.quietHours,
-    });
-  };
+  const modelEnabled = Form.useWatch("decisionModelEnabled", form);
+  const quiet = Form.useWatch(["quietHours", "enabled"], form);
+  const automatic =
+    mode === "smart" || mode === "probability" || mode === "always";
+  const channel = data?.channels.find(
+    (item) => item.channelId === channelId && item.channelKind === kind,
+  );
+  const groups =
+    data?.groups.filter(
+      (item) => item.channelKind === kind && item.channelId === channelId,
+    ) ?? [];
+  const group = groups.find(
+    (item) =>
+      item.groupId === groupId && (!agentId || item.agentId === agentId),
+  );
+  const selected =
+    scope === "defaults"
+      ? data?.defaults
+      : scope === "channelTypes"
+      ? data?.channelTypes.find((item) => item.channelKind === kind)?.settings
+      : scope === "channelInstances"
+      ? channel?.settings
+      : scope === "groupAgents"
+      ? group?.agentSettings
+      : group?.settings;
+  const overrideCount = Object.keys(selected?.overrides ?? {}).length;
 
   useEffect(() => {
     let active = true;
@@ -115,15 +165,16 @@ export function SocialTriggerSettingsPanel() {
       .getSocialTriggerSettings()
       .then((result) => {
         if (!active) return;
+        const selection = restoreSelection(result);
+        setScope(selection.scope);
+        setKind(selection.kind);
+        setChannelId(selection.channelId);
+        setGroupId(selection.groupId);
+        setAgentId(selection.agentId);
         setData(result);
-        form.setFieldsValue({ enabled: result.enabled, dryRun: result.dryRun });
-        if (result.groups[0]) choose(result.groups[0]);
       })
-      .catch(() => {
-        if (active)
-          setError(
-            "无法读取设置，请确认插件已启用并加载。\n如果刚安装插件，请重启 Octop 后重试。",
-          );
+      .catch((err) => {
+        if (active) setError(err instanceof Error ? err.message : "load");
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -131,357 +182,533 @@ export function SocialTriggerSettingsPanel() {
     return () => {
       active = false;
     };
-    // The form instance remains stable for this drawer.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form]);
+  }, []);
 
-  const save = async (values: FormValues) => {
-    if (!group) return;
-    if (values.delayMin > values.delayMax) {
-      message.error("最短等待时间不能大于最长等待时间");
-      return;
-    }
-    setSaving(true);
+  useEffect(() => {
+    if (!data) return;
     try {
-      await pluginsApi.saveSocialTriggerSettings({
-        enabled: values.enabled,
-        dryRun: values.dryRun,
-        channelId: group.channelId,
-        groupId: group.groupId,
-        mode: values.mode,
-        replyProbability: values.replyPercent / 100,
-        smartScoreThreshold: values.smartPercent / 100,
-        ...(data?.decisionModelSupported ? { decisionModelEnabled: values.decisionModelEnabled } : {}),
-        cooldownSeconds: values.cooldownSeconds,
-        maxPassiveRepliesPerHour: values.maxPassiveRepliesPerHour,
-        maxPassiveRepliesPerDay: values.maxPassiveRepliesPerDay,
-        maxConsecutiveReplies: values.maxConsecutiveReplies,
-        maxBotReplyRatio: values.botRatioPercent / 100,
-        randomDelayMinMs: Math.round(values.delayMin * 1000),
-        randomDelayMaxMs: Math.round(values.delayMax * 1000),
-        debounceMs: values.debounceMs,
-        contextMessages: values.contextMessages,
-        contextTtlSeconds: values.contextTtlSeconds,
-        mentionBypassCooldown: values.mentionBypassCooldown,
-        quietHours: values.quietHours,
+      localStorage.setItem(
+        selectionStorageKey,
+        JSON.stringify({ scope, kind, channelId, groupId, agentId }),
+      );
+    } catch {
+      // A blocked or full preference store must not prevent policy editing.
+    }
+  }, [data, scope, kind, channelId, groupId, agentId]);
+
+  useEffect(() => {
+    form.resetFields();
+    if (data)
+      form.setFieldsValue({
+        enabled: data.enabled,
+        dryRun: data.dryRun,
+        ...selected?.policy,
       });
-      const fresh = await pluginsApi.getSocialTriggerSettings();
-      setData(fresh);
-      const selected = fresh.groups.find(
-        (item) => groupKey(item) === groupKey(group),
-      );
-      if (selected) choose(selected);
-      message.success("设置已保存并生效");
+    setDirty(false);
+  }, [data, selected, form, scope, kind, channelId, groupId, agentId]);
+
+  const navigate = (change: () => void) => {
+    if (dirty)
+      Modal.confirm({
+        title: text("unsaved"),
+        content: text("unsavedHelp"),
+        onOk: change,
+      });
+    else change();
+  };
+  const chooseChannel = (id: string, nextKind = kind) => {
+    const nextGroups =
+      data?.groups.filter(
+        (item) => item.channelKind === nextKind && item.channelId === id,
+      ) ?? [];
+    setChannelId(id);
+    setGroupId(nextGroups[0]?.groupId ?? "");
+    setAgentId(
+      nextGroups[0]?.agentId ??
+        data?.channels.find(
+          (item) => item.channelId === id && item.channelKind === nextKind,
+        )?.agentId ??
+        "",
+    );
+  };
+  const chooseKind = (next: string) => {
+    setKind(next);
+    chooseChannel(
+      data?.channels.find((item) => item.channelKind === next)?.channelId ?? "",
+      next,
+    );
+  };
+
+  const save = async (reset = false) => {
+    try {
+      if (!reset) await form.validateFields();
+      const values = form.getFieldsValue(true);
+      if (!reset && values.randomDelayMinMs > values.randomDelayMaxMs) {
+        message.error(text("delayInvalid"));
+        return;
+      }
+      setSaving(true);
+      await pluginsApi.saveSocialTriggerSettings({
+        ...(reset ? {} : values),
+        channelKind: kind || "qq",
+        channelId,
+        groupId,
+        agentId,
+        scope: selected ? scope : "defaults",
+        reset,
+        ...(!data?.decisionModelSupported
+          ? {
+              decisionModelEnabled: undefined,
+              decisionModelTimeoutMs: undefined,
+              decisionModelMaxCallsPerDay: undefined,
+            }
+          : {}),
+      });
+      setData(await pluginsApi.getSocialTriggerSettings());
+      setDirty(false);
+      message.success(text("saved"));
     } catch (err) {
-      message.error(
-        err instanceof Error
-          ? err.message
-          : "保存失败，请检查群消息权限和填写的数值",
-      );
+      if (err && typeof err === "object" && "errorFields" in err) return;
+      message.error(err instanceof Error ? err.message : text("saveFailed"));
     } finally {
       setSaving(false);
     }
   };
 
   if (loading) return <Spin />;
-  if (error) return <Alert type="error" showIcon message={error} />;
-  if (!data?.groups.length)
+  if (error || !data)
     return (
       <Alert
-        type="info"
+        type="error"
         showIcon
-        message="暂无可配置的 QQ 群"
-        description="请先在目标群中 @ 机器人，收到回复后再打开此页面。"
+        message={error && error != "load" ? error : text("loadFailed")}
       />
     );
+  const label = (name: keyof SocialTriggerPolicy) => text(`fields.${name}`);
+  const number = (
+    name: keyof SocialTriggerPolicy,
+    min: number,
+    max: number,
+    scale = 1,
+    help?: string,
+  ) => (
+    <Form.Item
+      key={name}
+      name={name}
+      label={label(name)}
+      extra={help ? text(help) : undefined}
+      rules={[{ required: true }]}
+      getValueProps={(value) => ({
+        value:
+          typeof value === "number"
+            ? Number(
+                (value * scale).toFixed(scale === 100 ? 2 : scale < 1 ? 3 : 0),
+              )
+            : value,
+      })}
+      normalize={(value) =>
+        value === null
+          ? null
+          : scale < 1
+          ? Math.round(Number(value) / scale)
+          : Number(value) / scale
+      }
+    >
+      <InputNumber
+        min={min}
+        max={max}
+        step={1}
+        precision={scale === 100 ? 2 : scale < 1 ? 3 : 0}
+        style={{ width: "100%" }}
+      />
+    </Form.Item>
+  );
 
   return (
-    <section style={{ margin: "20px 0" }}>
-      <h4 style={{ margin: "0 0 16px" }}>群聊参与设置</h4>
-      <Space direction="vertical" style={{ width: "100%" }} size="middle">
-        <div>
-          <div style={{ marginBottom: 8 }}>选择 QQ 群</div>
-          <Select
-            aria-label="选择 QQ 群"
-            style={{ width: "100%" }}
-            value={group ? groupKey(group) : undefined}
-            options={data.groups.map((item, index) => ({
-              value: groupKey(item),
-              label: `${groupLabel(item)} · ${item.agentId}${
-                index === 0 ? "（最近活跃）" : ""
-              }`,
-            }))}
-            onChange={(value) => {
-              const selected = data.groups.find(
-                (item) => groupKey(item) === value,
-              );
-              if (selected) choose(selected);
-            }}
-          />
-        </div>
-        {group && !group.channelEnabled && (
-          <Alert type="warning" showIcon message="QQ 通道未启用。设置可以保存，启用通道后才会接收消息。" />
-        )}
-        {group && (!group.groupPolicyEnabled || group.groupVisibility !== "all") && (
-          <Alert type="warning" showIcon message="群聊策略未开启或可见范围不是全部消息。设置可以保存，修改通道群聊策略后才能自动参与。" />
-        )}
-        {group && !group.channelParticipationEnabled && (
-          <Alert type="warning" showIcon message="该 QQ 通道已关闭自动参与；在通道的群聊策略中开启后，插件规则才会生效。" />
-        )}
-        {group?.hostActivation === "always" && (
-          <Alert
-            type="warning"
-            showIcon
-            message="Octop 当前设置为每条消息都回复；关闭插件参与后，原有设置仍会生效。建议将该群改为仅 @ 回复。"
-          />
-        )}
-        {group && !group.settings.allowed && (
-          <Alert
-            type="info"
-            showIcon
-            message="此群尚未纳入插件范围，保存后会加入。"
-          />
-        )}
-        {data.recent && (
-          <Alert
-            type="info"
-            showIcon
-            message={`最近一次插件决策（所有群）：${
-              reasonText[data.recent.reasonCode] || "其他状态，请查看日志"
-            }${data.recent.decisionSource === "model" ? "（决策模型）" : data.recent.decisionSource === "rules" ? "（本地规则）" : ""}`}
-          />
-        )}
-        {group && (
-          <small>
-            当前参与方式来自：
-            {sourceText[group.settings.policySource.mode] || "全局默认"}
-            ；保存后按所选群和专家生效。
-          </small>
-        )}
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={(values: FormValues) => void save(values)}
-        >
+    <section style={{ margin: "24px 0" }}>
+      <h4 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 600 }}>
+        {text("title")}
+      </h4>
+      <Form
+        form={form}
+        layout="vertical"
+        onValuesChange={() => setDirty(true)}
+        onFinish={() => void save()}
+      >
+        <div style={grid}>
           <Form.Item
             name="enabled"
-            label="参与群聊"
+            label={text("enabled")}
             valuePropName="checked"
-            extra="总开关，影响此插件管理的所有群。关闭后交由 Octop 原有规则处理。"
+            extra={text("enabledHelp")}
           >
             <Switch />
           </Form.Item>
-          <Form.Item
-            name="decisionModelEnabled"
-            label="使用 Octop 决策模型"
-            valuePropName="checked"
-            extra="仅在智能参与模式下调用，会发送少量群消息给决策服务；服务不可用时自动回退到本地规则。"
-            hidden={!data.decisionModelSupported}
-          >
-            <Switch />
-          </Form.Item>
-          {data.decisionModelSupported && data.decisionModelConfigured === false && (
-            <Alert type="info" showIcon message="Octop 决策模型未启用或未配置，当前会使用本地规则。" />
-          )}
           <Form.Item
             name="dryRun"
-            label="试运行"
+            label={text("dryRun")}
             valuePropName="checked"
-            extra="开启时不调用主助手或发送回复；启用决策模型时仍可能调用决策服务。"
+            extra={text("dryRunHelp")}
           >
             <Switch />
           </Form.Item>
-          {dryRun === false && (
-            <Alert
-              type="warning"
-              showIcon
-              message="试运行已关闭，符合规则的普通群消息可能触发真实回复。"
-              style={{ marginBottom: 16 }}
-            />
-          )}
-          <Form.Item name="mode" label="参与方式" rules={[{ required: true }]}>
-            <Select
-              options={[
-                { value: "smart", label: "按聊天内容选择参与" },
-                { value: "probability", label: "按概率参与" },
-                { value: "always", label: "每条符合限制的消息都参与" },
-                { value: "mention_only", label: "只处理 @ 机器人" },
-                { value: "disabled", label: "关闭此群的插件规则" },
-              ]}
-            />
-          </Form.Item>
+        </div>
+        {dryRun === false && (
+          <Alert
+            style={{ marginBottom: 20 }}
+            type="warning"
+            showIcon
+            message={text("liveWarning")}
+          />
+        )}
+        <div style={{ ...grid, marginTop: 12 }}>
           <Form.Item
-            name="replyPercent"
-            label="参与概率（%）"
+            label={text("scope")}
             extra={
-              mode === "smart"
-                ? "先判断聊天内容是否相关，再按此概率参与。"
-                : "对符合条件的普通消息按此概率参与。"
+              <span
+                style={{
+                  display: "block",
+                  marginTop: 4,
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                }}
+              >
+                {text(
+                  scope === "defaults" ? "defaultScopeHelp" : "inheritanceHelp",
+                )}
+              </span>
             }
-            rules={[{ required: true }]}
           >
-            <InputNumber
-              min={0}
-              max={100}
-              step={1}
-              disabled={mode !== "smart" && mode !== "probability"}
-              style={{ width: "100%" }}
+            <Select
+              aria-label={text("scope")}
+              value={scope}
+              options={scopes.map((value) => ({
+                value,
+                label: text(`scopes.${value}`),
+              }))}
+              onChange={(value) => navigate(() => setScope(value))}
             />
           </Form.Item>
-          <Form.Item
-            name="smartPercent"
-            label="内容相关度门槛（%）"
-            extra="仅用于按聊天内容选择参与；分数达到门槛后再按参与概率抽样。"
-            rules={[{ required: true }]}
-          >
-            <InputNumber
-              min={0}
-              max={100}
-              disabled={mode !== "smart"}
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
-          <Form.Item
-            name="cooldownSeconds"
-            label="两次自动回复至少间隔（秒）"
-            rules={[{ required: true }]}
-          >
-            <InputNumber
-              min={0}
-              max={86400}
-              precision={0}
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
-          <Form.Item
-            name="maxPassiveRepliesPerHour"
-            label="每小时最多自动回复（条）"
-            extra="填 0 表示不自动回复。"
-            rules={[{ required: true }]}
-          >
-            <InputNumber
-              min={0}
-              max={10000}
-              precision={0}
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
-          <Form.Item
-            name="maxPassiveRepliesPerDay"
-            label="每天最多自动回复（条）"
-            rules={[{ required: true }]}
-          >
-            <InputNumber
-              min={0}
-              max={100000}
-              precision={0}
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
-          <Form.Item
-            name="delayMin"
-            label="回复前最短等待（秒）"
-            rules={[{ required: true }]}
-          >
-            <InputNumber min={0} max={300} step={1} style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item
-            name="delayMax"
-            label="回复前最长等待（秒）"
-            rules={[{ required: true }]}
-          >
-            <InputNumber min={0} max={300} step={1} style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item
-            name="maxConsecutiveReplies"
-            label="最多连续自动回复（条）"
-            rules={[{ required: true }]}
-          >
-            <InputNumber
-              min={1}
-              max={100}
-              precision={0}
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
-          <Form.Item
-            name="botRatioPercent"
-            label="机器人回复占比上限（%）"
-            extra="按最近观察到的普通消息和插件回复计算。"
-            rules={[{ required: true }]}
-          >
-            <InputNumber min={0} max={100} style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item
-            name="debounceMs"
-            label="连续消息合并等待（毫秒）"
-            rules={[{ required: true }]}
-          >
-            <InputNumber
-              min={0}
-              max={60000}
-              precision={0}
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
-          <Form.Item
-            name="contextMessages"
-            label="最多参考的最近消息数"
-            rules={[{ required: true }]}
-          >
-            <InputNumber
-              min={0}
-              max={100}
-              precision={0}
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
-          <Form.Item
-            name="contextTtlSeconds"
-            label="最近消息保留时间（秒）"
-            rules={[{ required: true }]}
-          >
-            <InputNumber
-              min={1}
-              max={86400}
-              precision={0}
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
-          <Form.Item
-            name="mentionBypassCooldown"
-            label="被 @ 时不受回复间隔限制"
-            valuePropName="checked"
-          >
-            <Switch />
-          </Form.Item>
-          <Form.Item
-            name={["quietHours", "enabled"]}
-            label="开启静默时段"
-            valuePropName="checked"
-            extra={`使用时区 ${data.timezone}；静默时段内不自动参与普通群聊。`}
-          >
-            <Switch />
-          </Form.Item>
-          <Form.Item
-            name={["quietHours", "start"]}
-            label="静默开始"
-            rules={[{ required: true }]}
-          >
-            <Input type="time" />
-          </Form.Item>
-          <Form.Item
-            name={["quietHours", "end"]}
-            label="静默结束"
-            rules={[{ required: true }]}
-          >
-            <Input type="time" />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" loading={saving}>
-            保存设置
-          </Button>
-        </Form>
-      </Space>
+          {scope !== "defaults" && (
+            <Form.Item label={text("channelKind")}>
+              <Select
+                aria-label={text("channelKind")}
+                value={kind || undefined}
+                options={data.channelTypes.map((item) => ({
+                  value: item.channelKind,
+                  label: channelLabel(item.channelKind),
+                }))}
+                onChange={(value) => navigate(() => chooseKind(value))}
+              />
+            </Form.Item>
+          )}
+          {!["defaults", "channelTypes"].includes(scope) && (
+            <Form.Item label={text("channelInstance")}>
+              <Select
+                aria-label={text("channelInstance")}
+                value={channelId || undefined}
+                options={data.channels
+                  .filter((item) => item.channelKind === kind)
+                  .map((item) => ({
+                    value: item.channelId,
+                    label: item.channelName || item.channelId,
+                  }))}
+                onChange={(value) => navigate(() => chooseChannel(value))}
+              />
+            </Form.Item>
+          )}
+          {["groups", "groupAgents"].includes(scope) && (
+            <Form.Item label={text("group")}>
+              <Select
+                showSearch
+                optionFilterProp="label"
+                aria-label={text("group")}
+                value={groupId || undefined}
+                placeholder={text("noGroups")}
+                options={[
+                  ...new Map(
+                    groups.map((item) => [
+                      item.groupId,
+                      {
+                        value: item.groupId,
+                        label: item.groupName
+                          ? `${item.groupName}（${item.groupId.slice(-6)}）`
+                          : item.groupId.slice(-6),
+                      },
+                    ]),
+                  ).values(),
+                ]}
+                onChange={(value) =>
+                  navigate(() => {
+                    setGroupId(value);
+                    setAgentId(
+                      groups.find((item) => item.groupId === value)?.agentId ??
+                        "",
+                    );
+                  })
+                }
+              />
+            </Form.Item>
+          )}
+          {scope === "groupAgents" && (
+            <Form.Item label={text("agent")}>
+              <Select
+                aria-label={text("agent")}
+                value={agentId || undefined}
+                options={groups
+                  .filter((item) => item.groupId === groupId)
+                  .map((item) => ({
+                    value: item.agentId,
+                    label: item.agentId,
+                  }))}
+                onChange={(value) => navigate(() => setAgentId(value))}
+              />
+            </Form.Item>
+          )}
+        </div>
+        {!selected ? (
+          <Alert
+            type="info"
+            showIcon
+            message={text("noGroups")}
+            description={text("noGroupsHelp")}
+          />
+        ) : (
+          <>
+            <Space style={{ marginBottom: 20 }} wrap>
+              <Popconfirm
+                title={text("resetConfirm")}
+                onConfirm={() => void save(true)}
+              >
+                <Button size="small" disabled={!overrideCount || saving}>
+                  {scope === "defaults" ? text("resetDefaults") : text("reset")}
+                </Button>
+              </Popconfirm>
+            </Space>
+            {scope === "groups" &&
+              group &&
+              Object.keys(group.agentSettings.overrides).length > 0 && (
+                <Alert
+                  style={{ marginBottom: 16 }}
+                  type="info"
+                  message={text("agentOverride")}
+                  action={
+                    <Button
+                      size="small"
+                      onClick={() => navigate(() => setScope("groupAgents"))}
+                    >
+                      {text("viewAgent")}
+                    </Button>
+                  }
+                />
+              )}
+            {["groups", "groupAgents"].includes(scope) && group && (
+              <Space
+                direction="vertical"
+                style={{ width: "100%", marginBottom: 20 }}
+              >
+                {!group.channelEnabled && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message={text("channelDisabled")}
+                  />
+                )}
+                {group.channelEnabled &&
+                  (!group.groupPolicyEnabled ||
+                    group.groupVisibility !== "all") && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message={
+                        group.policyKnown === false
+                          ? text("policyUnknown")
+                          : text("visibilityWarning")
+                      }
+                    />
+                  )}
+                {!group.channelParticipationEnabled && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message={text("channelParticipationDisabled")}
+                  />
+                )}
+                {group.hostActivation === "always" && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message={text("nativeAlwaysWarning")}
+                  />
+                )}
+                {!group.settings.allowed && (
+                  <Alert type="info" showIcon message={text("groupOptIn")} />
+                )}
+              </Space>
+            )}
+            <Form.Item
+              name="mode"
+              label={label("mode")}
+              rules={[{ required: true }]}
+            >
+              <Select
+                options={[
+                  "smart",
+                  "probability",
+                  "always",
+                  "mention_only",
+                  "disabled",
+                ].map((value) => ({ value, label: text(`modes.${value}`) }))}
+              />
+            </Form.Item>
+            {mode === "smart" && (
+              <>
+                {data.decisionModelSupported && (
+                  <Form.Item
+                    name="decisionModelEnabled"
+                    label={label("decisionModelEnabled")}
+                    valuePropName="checked"
+                    extra={text("modelHelp")}
+                  >
+                    <Switch />
+                  </Form.Item>
+                )}
+                {modelEnabled && data.decisionModelSupported && (
+                  <>
+                    {data.decisionModelConfigured === false && (
+                      <Alert
+                        style={{ marginBottom: 16 }}
+                        type="info"
+                        showIcon
+                        message={text("modelUnavailable")}
+                      />
+                    )}
+                    <div style={grid}>
+                      {number("decisionModelTimeoutMs", 0, 3000)}
+                      {number(
+                        "decisionModelMaxCallsPerDay",
+                        0,
+                        100000,
+                        1,
+                        "modelBudgetHelp",
+                      )}
+                    </div>
+                  </>
+                )}
+                {number("smartScoreThreshold", 0, 100, 100, "thresholdHelp")}
+              </>
+            )}
+            {(mode === "smart" || mode === "probability") &&
+              number(
+                "replyProbability",
+                0,
+                100,
+                100,
+                mode === "smart" ? "smartProbabilityHelp" : "probabilityHelp",
+              )}
+            {automatic && (
+              <>
+                <h5
+                  style={{
+                    margin: "24px 0 16px",
+                    fontSize: 16,
+                    fontWeight: 600,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {text("frequency")}
+                </h5>
+                {number("cooldownSeconds", 0, 86400)}
+                <div style={grid}>
+                  {number("maxPassiveRepliesPerHour", 0, 10000, 1, "zeroLimit")}
+                  {number("maxPassiveRepliesPerDay", 0, 100000, 1, "zeroLimit")}
+                </div>
+                <Form.Item
+                  name={["quietHours", "enabled"]}
+                  label={text("quiet")}
+                  valuePropName="checked"
+                  extra={text("timezone", { timezone: data.timezone })}
+                >
+                  <Switch />
+                </Form.Item>
+                {quiet && (
+                  <div style={grid}>
+                    <Form.Item
+                      name={["quietHours", "start"]}
+                      label={text("quietStart")}
+                      rules={[{ required: true }]}
+                    >
+                      <Input type="time" />
+                    </Form.Item>
+                    <Form.Item
+                      name={["quietHours", "end"]}
+                      label={text("quietEnd")}
+                      rules={[{ required: true }]}
+                    >
+                      <Input type="time" />
+                    </Form.Item>
+                  </div>
+                )}
+                <Collapse
+                  style={{ marginBottom: 20 }}
+                  items={[
+                    {
+                      key: "context",
+                      label: text("context"),
+                      children: (
+                        <div style={grid}>
+                          {number("contextMessages", 0, 100)}
+                          {number("contextTtlSeconds", 1, 86400)}
+                          {number("debounceMs", 0, 60000)}
+                        </div>
+                      ),
+                    },
+                    {
+                      key: "advanced",
+                      label: text("advanced"),
+                      children: (
+                        <>
+                          <div style={grid}>
+                            {number("randomDelayMinMs", 0, 300, 0.001)}
+                            {number("randomDelayMaxMs", 0, 300, 0.001)}
+                            {number("maxConsecutiveReplies", 1, 100)}
+                            {number("maxBotReplyRatio", 0, 100, 100)}
+                          </div>
+                          <Form.Item
+                            name="mentionBypassCooldown"
+                            label={label("mentionBypassCooldown")}
+                            valuePropName="checked"
+                          >
+                            <Switch />
+                          </Form.Item>
+                        </>
+                      ),
+                    },
+                  ]}
+                />
+              </>
+            )}
+          </>
+        )}
+        <Button
+          type="primary"
+          htmlType="submit"
+          loading={saving}
+          style={{ marginTop: selected ? 0 : 16 }}
+        >
+          {text("save")}
+        </Button>
+      </Form>
+      {data.recent && (
+        <details style={{ marginTop: 20 }}>
+          <summary>{text("recentDecision")}</summary>
+          <p>
+            {text(`reasons.${data.recent.reasonCode}`, {
+              defaultValue: text("unknownDecision"),
+            })}
+          </p>
+        </details>
+      )}
     </section>
   );
 }
