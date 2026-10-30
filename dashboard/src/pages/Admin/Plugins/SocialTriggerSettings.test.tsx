@@ -20,6 +20,8 @@ const settings = {
   enabled: true,
   dryRun: true,
   timezone: "Asia/Shanghai",
+  decisionModelSupported: true,
+  decisionModelConfigured: false,
   recent: null,
   groups: [
     {
@@ -41,6 +43,7 @@ const settings = {
           mode: "probability" as const,
           replyProbability: 0.25,
           smartScoreThreshold: 0.7,
+          decisionModelEnabled: true,
           cooldownSeconds: 180,
           maxPassiveRepliesPerHour: 3,
           maxPassiveRepliesPerDay: 10,
@@ -86,6 +89,22 @@ describe("QQ 群聊设置", () => {
         }),
       ),
     );
+  });
+
+  it("智能模式可关闭决策模型并保存", async () => {
+    vi.mocked(pluginsApi.getSocialTriggerSettings).mockResolvedValue({
+      ...settings,
+      groups: [{ ...settings.groups[0], settings: { ...settings.groups[0].settings, policy: { ...settings.groups[0].settings.policy, mode: "smart" } } }],
+    });
+    render(<SocialTriggerSettingsPanel />);
+    const toggle = await screen.findByLabelText("使用 Octop 决策模型");
+    expect(toggle).toBeChecked();
+    expect(screen.getByText("Octop 决策模型未启用或未配置，当前会使用本地规则。")).toBeInTheDocument();
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(pluginsApi.saveSocialTriggerSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ decisionModelEnabled: false }),
+    ));
   });
 
   it("通道关闭时说明原因，仍可保存设置", async () => {

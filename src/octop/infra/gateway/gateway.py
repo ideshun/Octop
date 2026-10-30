@@ -280,9 +280,28 @@ class Gateway:
     async def _plugin_inbound(self, channel: Any, message: Any, dispatch: Any) -> bool:
         from octop_harness.plugins.registry import PluginRegistry
         for handler in PluginRegistry().all_inbound():
+            bind = getattr(handler, "bind_decision_scorer", None)
+            provider = getattr(self, "_decision_scorer_for_plugin", None)
+            if callable(bind) and callable(provider):
+                try:
+                    bind(provider)
+                except Exception:
+                    logger.warning("could not bind plugin decision scorer")
             if await handler.handle(channel, message, dispatch):
                 return True
         return False
+
+    async def _decision_scorer_for_plugin(self) -> Any | None:
+        """Provide the configured decision scorer without exposing its credentials to the UI."""
+        from octop_harness.decision.client import HttpDecisionClient
+        from octop_harness.decision.config import DecisionConfig
+
+        value = await asyncio.to_thread(self._agent_manager.decision.harness_config)
+        if not isinstance(value, DecisionConfig):
+            return None
+        return HttpDecisionClient(
+            endpoint=value.endpoint, api_key=value.api_key, model=value.model, provider=value.provider
+        ).score_async
 
     async def refresh_media_backends(self) -> None:
         """Re-set media backends on all registered channels.

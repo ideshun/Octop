@@ -23,11 +23,12 @@ async def test_social_trigger_settings_permissions_and_save(env_admin_alice):
         settings_for=lambda *_: {"policy": {"mode": "smart"}, "allowed": True},
         recent=[],
         update_settings=AsyncMock(),
+        bind_decision_scorer=lambda _: None,
     )
     group = {"channelId": "channel", "groupId": "group", "agentId": "agent", "ready": True}
     payload = {
         "enabled": True, "dryRun": True, "channelId": "channel", "groupId": "group",
-        "mode": "probability", "replyProbability": 0.2, "cooldownSeconds": 120,
+        "mode": "probability", "replyProbability": 0.2, "cooldownSeconds": 120, "decisionModelEnabled": False,
         "maxPassiveRepliesPerHour": 3, "maxPassiveRepliesPerDay": 10,
         "randomDelayMinMs": 1000, "randomDelayMaxMs": 3000,
         "smartScoreThreshold": 0.7, "maxConsecutiveReplies": 2, "maxBotReplyRatio": 0.5,
@@ -42,10 +43,16 @@ async def test_social_trigger_settings_permissions_and_save(env_admin_alice):
         response = await client.get("/api/plugins/social-trigger/settings", headers=admin)
         assert response.status_code == 200
         assert response.json()["groups"][0]["settings"]["policy"]["mode"] == "smart"
+        assert response.json()["decisionModelSupported"] is True
         response = await client.put("/api/plugins/social-trigger/settings", headers=admin, json=payload)
         assert response.status_code == 200, response.text
         handler.update_settings.assert_awaited_once()
         assert handler.update_settings.await_args.kwargs["policy"]["replyProbability"] == 0.2
+        assert handler.update_settings.await_args.kwargs["policy"]["decisionModelEnabled"] is False
+        old_client_payload = {key: value for key, value in payload.items() if key != "decisionModelEnabled"}
+        response = await client.put("/api/plugins/social-trigger/settings", headers=admin, json=old_client_payload)
+        assert response.status_code == 200
+        assert "decisionModelEnabled" not in handler.update_settings.await_args.kwargs["policy"]
         response = await client.put("/api/plugins/social-trigger/settings", headers=admin, json={**payload, "groupId": "unknown"})
         assert response.status_code == 404
         response = await client.put("/api/plugins/social-trigger/settings", headers=admin, json={**payload, "replyProbability": 2})
@@ -59,7 +66,7 @@ async def test_social_trigger_settings_can_be_saved_when_channel_is_disabled(env
     group = {"channelId": "channel", "groupId": "group", "agentId": "agent", "ready": False}
     payload = {
         "enabled": True, "dryRun": True, "channelId": "channel", "groupId": "group",
-        "mode": "probability", "replyProbability": 0.2, "cooldownSeconds": 120,
+        "mode": "probability", "replyProbability": 0.2, "cooldownSeconds": 120, "decisionModelEnabled": True,
         "maxPassiveRepliesPerHour": 3, "maxPassiveRepliesPerDay": 10,
         "randomDelayMinMs": 1000, "randomDelayMaxMs": 3000,
         "smartScoreThreshold": 0.7, "maxConsecutiveReplies": 2, "maxBotReplyRatio": 0.5,
@@ -72,6 +79,7 @@ async def test_social_trigger_settings_can_be_saved_when_channel_is_disabled(env
         response = await client.put("/api/plugins/social-trigger/settings", headers=admin, json=payload)
         assert response.status_code == 200, response.text
         handler.update_settings.assert_awaited_once()
+        assert "decisionModelEnabled" not in handler.update_settings.await_args.kwargs["policy"]
 
         handler.update_settings.side_effect = ValueError("具体的配置错误")
         response = await client.put("/api/plugins/social-trigger/settings", headers=admin, json=payload)

@@ -13,6 +13,7 @@ export interface SocialTriggerPolicy {
   mode: "disabled" | "mention_only" | "smart" | "probability" | "always";
   replyProbability: number;
   smartScoreThreshold: number;
+  decisionModelEnabled?: boolean;
   cooldownSeconds: number;
   maxPassiveRepliesPerHour: number;
   maxPassiveRepliesPerDay: number;
@@ -46,7 +47,9 @@ export interface SocialTriggerSettings {
   enabled: boolean;
   dryRun: boolean;
   timezone: string;
-  recent: { reasonCode: string; event: string } | null;
+  decisionModelSupported?: boolean;
+  decisionModelConfigured?: boolean | null;
+  recent: { reasonCode: string; event: string; decisionSource?: "model" | "rules" | "policy" } | null;
   groups: SocialTriggerGroup[];
 }
 

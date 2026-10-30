@@ -60,6 +60,7 @@ class SocialTriggerSettingsBody(BaseModel):
     mode: Literal["disabled", "mention_only", "smart", "probability", "always"]
     replyProbability: float = Field(ge=0, le=1)
     smartScoreThreshold: float = Field(ge=0, le=1)
+    decisionModelEnabled: bool | None = None
     cooldownSeconds: int = Field(ge=0, le=86400)
     maxPassiveRepliesPerHour: int = Field(ge=0, le=10000)
     maxPassiveRepliesPerDay: int = Field(ge=0, le=100000)
@@ -183,10 +184,18 @@ async def get_social_trigger_settings(
     groups = _social_trigger_groups(server)
     for group in groups:
         group["settings"] = handler.settings_for(group["channelId"], group["groupId"], group["agentId"])
+    decision_configured = None
+    try:
+        if server.app_runtime is not None:
+            decision_configured = server.app_runtime.agent_registry.decision.load().active
+    except Exception:
+        pass  # Unavailable decision settings must not block plugin configuration.
     return {
         "enabled": handler.config["enabled"],
         "dryRun": handler.config["dryRun"],
         "timezone": handler.config["timezone"],
+        "decisionModelSupported": callable(getattr(handler, "bind_decision_scorer", None)),
+        "decisionModelConfigured": decision_configured,
         "recent": list(handler.recent)[-1] if handler.recent else None,
         "groups": groups,
     }
@@ -203,7 +212,9 @@ async def put_social_trigger_settings(
     group = next((g for g in groups if g["channelId"] == body.channelId and g["groupId"] == body.groupId), None)
     if group is None:
         raise OctopError(ErrorCode.NOT_FOUND, "未找到该 QQ 群，请先在群里 @ 机器人", status=404)
-    policy = body.model_dump(exclude={"enabled", "dryRun", "channelId", "groupId"})
+    policy = body.model_dump(exclude={"enabled", "dryRun", "channelId", "groupId"}, exclude_none=True)
+    if not callable(getattr(handler, "bind_decision_scorer", None)):
+        policy.pop("decisionModelEnabled", None)
     try:
         await handler.update_settings(enabled=body.enabled, dry_run=body.dryRun, channel_id=body.channelId, group_id=body.groupId, agent_id=group["agentId"], policy=policy)
     except ValueError as exc:

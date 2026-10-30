@@ -23,6 +23,7 @@ type FormValues = {
   mode: "disabled" | "mention_only" | "smart" | "probability" | "always";
   replyPercent: number;
   smartPercent: number;
+  decisionModelEnabled: boolean;
   cooldownSeconds: number;
   maxPassiveRepliesPerHour: number;
   maxPassiveRepliesPerDay: number;
@@ -58,6 +59,8 @@ const reasonText: Record<string, string> = {
   cooldown: "尚未超过回复间隔",
   bot_reply_ratio: "机器人发言占比已达上限",
   consecutive_limit: "已达到连续回复上限",
+  decision_model_unavailable: "决策模型不可用，已切换到本地规则",
+  decision_model_budget: "决策模型调用已达上限，已切换到本地规则",
   reply_cancelled: "待发送的回复已取消",
   delivery_unknown: "发送结果不明确，需检查日志",
 };
@@ -86,6 +89,7 @@ export function SocialTriggerSettingsPanel() {
       mode: policy.mode,
       replyPercent: Math.round(policy.replyProbability * 10000) / 100,
       smartPercent: Math.round(policy.smartScoreThreshold * 10000) / 100,
+      decisionModelEnabled: policy.decisionModelEnabled ?? true,
       cooldownSeconds: policy.cooldownSeconds,
       maxPassiveRepliesPerHour: policy.maxPassiveRepliesPerHour,
       maxPassiveRepliesPerDay: policy.maxPassiveRepliesPerDay,
@@ -143,6 +147,7 @@ export function SocialTriggerSettingsPanel() {
         mode: values.mode,
         replyProbability: values.replyPercent / 100,
         smartScoreThreshold: values.smartPercent / 100,
+        ...(data?.decisionModelSupported ? { decisionModelEnabled: values.decisionModelEnabled } : {}),
         cooldownSeconds: values.cooldownSeconds,
         maxPassiveRepliesPerHour: values.maxPassiveRepliesPerHour,
         maxPassiveRepliesPerDay: values.maxPassiveRepliesPerDay,
@@ -250,7 +255,7 @@ export function SocialTriggerSettingsPanel() {
             showIcon
             message={`最近一次插件决策（所有群）：${
               reasonText[data.recent.reasonCode] || "其他状态，请查看日志"
-            }`}
+            }${data.recent.decisionSource === "model" ? "（决策模型）" : data.recent.decisionSource === "rules" ? "（本地规则）" : ""}`}
           />
         )}
         {group && (
@@ -277,7 +282,7 @@ export function SocialTriggerSettingsPanel() {
             name="dryRun"
             label="试运行"
             valuePropName="checked"
-            extra="开启时只记录是否会回复，不会因普通群消息调用机器人或发送回复。"
+            extra="开启时不调用主助手或发送回复；启用决策模型时仍可能调用决策服务。"
           >
             <Switch />
           </Form.Item>
@@ -318,6 +323,18 @@ export function SocialTriggerSettingsPanel() {
               style={{ width: "100%" }}
             />
           </Form.Item>
+          <Form.Item
+            name="decisionModelEnabled"
+            label="使用 Octop 决策模型"
+            valuePropName="checked"
+            extra="仅用于按聊天内容选择参与。会将当前和少量近期群消息发送给 Octop 的决策服务；服务关闭、不可用或超时时自动使用本地规则。"
+            hidden={!data.decisionModelSupported}
+          >
+            <Switch disabled={mode !== "smart"} />
+          </Form.Item>
+          {data.decisionModelSupported && data.decisionModelConfigured === false && (
+            <Alert type="info" showIcon message="Octop 决策模型未启用或未配置，当前会使用本地规则。" />
+          )}
           <Form.Item
             name="smartPercent"
             label="内容相关度门槛（%）"
