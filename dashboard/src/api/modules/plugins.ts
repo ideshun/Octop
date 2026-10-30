@@ -31,6 +31,7 @@ export interface SocialTriggerPolicy {
 export interface SocialTriggerGroup {
   channelId: string;
   groupId: string;
+  groupName?: string | null;
   agentId: string;
   channelName: string;
   updatedAt: number;

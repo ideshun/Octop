@@ -40,6 +40,10 @@ type FormValues = {
 
 const groupKey = (group: SocialTriggerGroup) =>
   JSON.stringify([group.channelId, group.groupId]);
+const groupLabel = (group: SocialTriggerGroup) => {
+  const suffix = group.groupId.slice(-6);
+  return group.groupName ? `${group.groupName}（${suffix}）` : suffix;
+};
 const reasonText: Record<string, string> = {
   dry_run_would_trigger: "试运行：符合条件，本次没有发送",
   eligible: "符合条件，准备回复",
@@ -193,7 +197,7 @@ export function SocialTriggerSettingsPanel() {
 
   return (
     <section style={{ margin: "20px 0" }}>
-      <h4>群聊参与设置</h4>
+      <h4 style={{ margin: "0 0 16px" }}>群聊参与设置</h4>
       <Space direction="vertical" style={{ width: "100%" }} size="middle">
         <div>
           <div style={{ marginBottom: 8 }}>选择 QQ 群</div>
@@ -203,9 +207,7 @@ export function SocialTriggerSettingsPanel() {
             value={group ? groupKey(group) : undefined}
             options={data.groups.map((item, index) => ({
               value: groupKey(item),
-              label: `${
-                item.channelName || "QQ 通道"
-              } · 群 ${item.groupId.slice(-6)} · ${item.agentId}${
+              label: `${groupLabel(item)} · ${item.agentId}${
                 index === 0 ? "（最近活跃）" : ""
               }`,
             }))}
@@ -216,15 +218,6 @@ export function SocialTriggerSettingsPanel() {
               if (selected) choose(selected);
             }}
           />
-          <small>
-            群列表来自已接收过消息的会话；设置仅作用于所选群和专家。
-          </small>
-          <div>
-            <small>
-              普通消息还需要在 QQ 群中授权机器人获取全部群消息，Octop
-              无法读取该授权状态。
-            </small>
-          </div>
         </div>
         {group && !group.channelEnabled && (
           <Alert type="warning" showIcon message="QQ 通道未启用。设置可以保存，启用通道后才会接收消息。" />
@@ -279,6 +272,18 @@ export function SocialTriggerSettingsPanel() {
             <Switch />
           </Form.Item>
           <Form.Item
+            name="decisionModelEnabled"
+            label="使用 Octop 决策模型"
+            valuePropName="checked"
+            extra="仅在智能参与模式下调用，会发送少量群消息给决策服务；服务不可用时自动回退到本地规则。"
+            hidden={!data.decisionModelSupported}
+          >
+            <Switch />
+          </Form.Item>
+          {data.decisionModelSupported && data.decisionModelConfigured === false && (
+            <Alert type="info" showIcon message="Octop 决策模型未启用或未配置，当前会使用本地规则。" />
+          )}
+          <Form.Item
             name="dryRun"
             label="试运行"
             valuePropName="checked"
@@ -323,18 +328,6 @@ export function SocialTriggerSettingsPanel() {
               style={{ width: "100%" }}
             />
           </Form.Item>
-          <Form.Item
-            name="decisionModelEnabled"
-            label="使用 Octop 决策模型"
-            valuePropName="checked"
-            extra="仅用于按聊天内容选择参与。会将当前和少量近期群消息发送给 Octop 的决策服务；服务关闭、不可用或超时时自动使用本地规则。"
-            hidden={!data.decisionModelSupported}
-          >
-            <Switch disabled={mode !== "smart"} />
-          </Form.Item>
-          {data.decisionModelSupported && data.decisionModelConfigured === false && (
-            <Alert type="info" showIcon message="Octop 决策模型未启用或未配置，当前会使用本地规则。" />
-          )}
           <Form.Item
             name="smartPercent"
             label="内容相关度门槛（%）"
