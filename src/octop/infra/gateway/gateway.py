@@ -251,8 +251,9 @@ class Gateway:
         from octop.infra.gateway.channels.telegram_bridge import is_telegram_button_reply
 
         self._channel_manager = ChannelManager(
-            channels={}, control_message_predicate=is_telegram_button_reply, inbound_handler=self._plugin_inbound
+            channels={}, control_message_predicate=is_telegram_button_reply
         )
+        self._bind_plugin_inbound(self._channel_manager)
         self._channel_manager.set_pre_lock_handler(self._preempt_cancel_on_stop)
         await self._channel_manager.start()
 
@@ -277,21 +278,30 @@ class Gateway:
 
         logger.info("Gateway booted")
 
+    def _bind_plugin_inbound(self, manager: ChannelManager) -> None:
+        """Old Gateway releases keep native routing until the admission API is available."""
+        setter = getattr(manager, "set_inbound_handler", None)
+        if callable(setter):
+            setter(self._plugin_inbound)
+
     async def _plugin_inbound(self, channel: Any, message: Any, dispatch: Any) -> bool:
         from octop_harness.plugins.registry import PluginRegistry
-        for handler in PluginRegistry().all_inbound():
+
+        handlers: list[Any] = getattr(PluginRegistry(), "all_inbound", lambda: [])()
+        for handler in handlers:
             bind = getattr(handler, "bind_decision_scorer", None)
-            provider = getattr(self, "_decision_scorer_for_plugin", None)
-            if callable(bind) and callable(provider):
+            if callable(bind):
                 try:
-                    bind(provider)
+                    bind(self._decision_scorer_for_plugin)
                 except Exception:
                     logger.warning("could not bind plugin decision scorer")
             if await handler.handle(channel, message, dispatch):
                 return True
         return False
 
-    async def _decision_scorer_for_plugin(self) -> Any | None:
+    async def _decision_scorer_for_plugin(
+        self,
+    ) -> Callable[..., Awaitable[dict[str, float]]] | None:
         """Provide the configured decision scorer without exposing its credentials to the UI."""
         from octop_harness.decision.client import HttpDecisionClient
         from octop_harness.decision.config import DecisionConfig
@@ -300,7 +310,10 @@ class Gateway:
         if not isinstance(value, DecisionConfig):
             return None
         return HttpDecisionClient(
-            endpoint=value.endpoint, api_key=value.api_key, model=value.model, provider=value.provider
+            endpoint=value.endpoint,
+            api_key=value.api_key,
+            model=value.model,
+            provider=value.provider,
         ).score_async
 
     async def refresh_media_backends(self) -> None:
@@ -363,7 +376,8 @@ class Gateway:
 
     async def shutdown(self) -> None:
         from octop_harness.plugins.registry import PluginRegistry
-        for handler in PluginRegistry().all_inbound():
+
+        for handler in getattr(PluginRegistry(), "all_inbound", lambda: [])():
             try:
                 handler.close()
                 wait_closed = getattr(handler, "wait_closed", None)

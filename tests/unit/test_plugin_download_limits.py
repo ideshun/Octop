@@ -19,9 +19,7 @@ class Response(io.BytesIO):
 def test_download_limits_bytes(tmp_path: Path) -> None:
     with (
         patch.object(manager, "_MAX_PLUGIN_ARCHIVE_BYTES", 3),
-        patch.object(
-            manager.urllib.request, "urlopen", return_value=Response(b"1234")
-        ) as opened,
+        patch.object(manager.urllib.request, "urlopen", return_value=Response(b"1234")) as opened,
         pytest.raises(OctopError, match="exceeds"),
     ):
         manager._download_plugin_archive("https://example.test/plugin.zip", tmp_path / "plugin.zip")

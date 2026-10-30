@@ -53,7 +53,9 @@ def test_failed_update_restores_registration(manager: PluginManager, tmp_path: P
     ).read_bytes()
 
 
-def test_failed_update_restores_live_inbound_handler(manager: PluginManager, tmp_path: Path) -> None:
+def test_failed_update_restores_live_inbound_handler(
+    manager: PluginManager, tmp_path: Path
+) -> None:
     source = tmp_path / "hook"
     source.mkdir()
     (source / "plugin.yaml").write_text(
