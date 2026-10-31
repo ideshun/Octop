@@ -7,11 +7,13 @@ import {
   Input,
   InputNumber,
   Modal,
+  Pagination,
   Popconfirm,
   Select,
   Space,
   Spin,
   Switch,
+  Tag,
 } from "antd";
 import { useTranslation } from "react-i18next";
 import { message } from "@/utils/antdMessage";
@@ -21,6 +23,7 @@ import {
   type SocialTriggerSettings,
   type SocialTriggerScope,
 } from "../../../api/modules/plugins";
+import styles from "./SocialTriggerSettings.module.less";
 
 type Values = SocialTriggerPolicy & { enabled: boolean; dryRun: boolean };
 const scopes: SocialTriggerScope[] = [
@@ -115,6 +118,196 @@ const grid = {
   gap: "0 16px",
 };
 
+const normalizeTerm = (term: string) => term.normalize("NFKC").toLowerCase();
+function mergeBlockedTerms(existing: string[], draft: string) {
+  const terms = draft
+    .split(/[,，;；\r\n]+/)
+    .map((term) => term.trim())
+    .filter(Boolean);
+  if (terms.some((term) => [...term].length > 100)) {
+    return { error: "blockedTermsTooLong" };
+  }
+  const seen = new Set(existing.map(normalizeTerm));
+  const next = [...existing];
+  for (const term of terms) {
+    const key = normalizeTerm(term);
+    if (!seen.has(key)) {
+      seen.add(key);
+      next.push(term);
+    }
+  }
+  if (next.length > 5000) return { error: "blockedTermsTooMany" };
+  return { terms: next };
+}
+
+function BlockedTermsEditor({
+  id,
+  value = [],
+  onChange,
+}: {
+  id?: string;
+  value?: string[];
+  onChange?: (terms: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  const text = (key: string, values?: Record<string, unknown>) =>
+    t(`plugins.participation.${key}`, values);
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [page, setPage] = useState(1);
+  const filtered = value
+    .map((term, index) => ({ term, index }))
+    .filter(({ term }) =>
+      normalizeTerm(term).includes(normalizeTerm(draft.trim())),
+    );
+  const currentPage = Math.min(
+    page,
+    Math.max(1, Math.ceil(filtered.length / 50)),
+  );
+
+  const add = () => {
+    if (!draft.trim()) return;
+    const result = mergeBlockedTerms(value, draft);
+    if (!result.terms) {
+      message.error(text(result.error ?? "saveFailed"));
+      return;
+    }
+    onChange?.(result.terms);
+    setDraft("");
+    setPage(1);
+  };
+  const finish = () => {
+    setOpen(false);
+    setDraft("");
+    setPage(1);
+  };
+
+  return (
+    <>
+      <Space>
+        <Button
+          id={id}
+          aria-label={text("blockedTermsManage")}
+          onClick={() => setOpen(true)}
+        >
+          {text("blockedTermsManage")}
+        </Button>
+        <span>{text("blockedTermsCount", { count: value.length })}</span>
+      </Space>
+      <Modal
+        title={text("blockedTermsManage")}
+        open={open}
+        onCancel={finish}
+        footer={
+          <Button
+            type="primary"
+            aria-label={text("blockedTermsDone")}
+            onClick={finish}
+          >
+            {text("blockedTermsDone")}
+          </Button>
+        }
+      >
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Space.Compact style={{ width: "100%" }}>
+            <Input
+              allowClear
+              aria-label={text("blockedTermsInput")}
+              value={draft}
+              placeholder={text("blockedTermsPlaceholder")}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                setPage(1);
+              }}
+              onPaste={(event) => {
+                const pasted = event.clipboardData.getData("text");
+                if (!/[\r\n]/.test(pasted)) return;
+                event.preventDefault();
+                const start =
+                  event.currentTarget.selectionStart ?? draft.length;
+                const end = event.currentTarget.selectionEnd ?? start;
+                setDraft(
+                  draft.slice(0, start) +
+                    pasted.replace(/[\r\n]+/g, "，") +
+                    draft.slice(end),
+                );
+                setPage(1);
+              }}
+              onPressEnter={(event) => {
+                event.preventDefault();
+                add();
+              }}
+            />
+            <Button aria-label={text("blockedTermsAdd")} onClick={add}>
+              {text("blockedTermsAdd")}
+            </Button>
+          </Space.Compact>
+          <div style={{ color: "var(--ant-color-text-secondary)" }}>
+            {draft.trim()
+              ? text("blockedTermsMatchCount", {
+                  count: filtered.length,
+                  total: value.length,
+                })
+              : text("blockedTermsCount", { count: value.length })}
+          </div>
+          {filtered.length > 0 ? (
+            <div style={{ maxHeight: 240, overflowY: "auto" }}>
+              <Space wrap>
+                {filtered
+                  .slice((currentPage - 1) * 50, currentPage * 50)
+                  .map(({ term, index }) => (
+                    <Tag
+                      key={`${index}:${term}`}
+                      closable
+                      closeIcon={
+                        <button
+                          type="button"
+                          aria-label={text("blockedTermsRemove", { term })}
+                          style={{
+                            border: 0,
+                            padding: 0,
+                            background: "none",
+                            cursor: "pointer",
+                          }}
+                        >
+                          ×
+                        </button>
+                      }
+                      onClose={(event) => {
+                        event.preventDefault();
+                        onChange?.(
+                          value.filter((_, itemIndex) => itemIndex !== index),
+                        );
+                      }}
+                    >
+                      {term}
+                    </Tag>
+                  ))}
+              </Space>
+            </div>
+          ) : (
+            <div>
+              {text(value.length ? "blockedTermsNoMatch" : "blockedTermsEmpty")}
+            </div>
+          )}
+          {filtered.length > 50 && (
+            <Pagination
+              size="small"
+              current={currentPage}
+              pageSize={50}
+              total={filtered.length}
+              onChange={setPage}
+            />
+          )}
+          <div className={styles.description}>
+            {text("blockedTermsMediaHelp")}
+          </div>
+        </Space>
+      </Modal>
+    </>
+  );
+}
+
 export function SocialTriggerSettingsPanel() {
   const { t } = useTranslation();
   const text = (key: string, values?: Record<string, unknown>) =>
@@ -136,6 +329,11 @@ export function SocialTriggerSettingsPanel() {
   const quiet = Form.useWatch(["quietHours", "enabled"], form);
   const automatic =
     mode === "smart" || mode === "probability" || mode === "always";
+  const showModelOptions =
+    mode === "smart" &&
+    modelEnabled &&
+    data?.decisionModelSupported &&
+    data.decisionModelConfigured !== false;
   const channel = data?.channels.find(
     (item) => item.channelId === channelId && item.channelKind === kind,
   );
@@ -325,7 +523,7 @@ export function SocialTriggerSettingsPanel() {
   );
 
   return (
-    <section style={{ margin: "24px 0" }}>
+    <section className={styles.root} style={{ margin: "24px 0" }}>
       <h4 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 600 }}>
         {text("title")}
       </h4>
@@ -363,14 +561,36 @@ export function SocialTriggerSettingsPanel() {
         )}
         <div style={{ ...grid, marginTop: 12 }}>
           <Form.Item
-            label={text("scope")}
+            className={styles.scope}
+            htmlFor="social-trigger-scope"
+            label={
+              <div className={styles.scopeHeader}>
+                <span>{text("scope")}</span>
+                <Popconfirm
+                  title={text("resetConfirm")}
+                  onConfirm={() => void save(true)}
+                >
+                  <Button
+                    size="small"
+                    aria-label={
+                      scope === "defaults"
+                        ? text("resetDefaults")
+                        : text("reset")
+                    }
+                    disabled={!selected || !overrideCount || saving}
+                  >
+                    {scope === "defaults"
+                      ? text("resetDefaults")
+                      : text("reset")}
+                  </Button>
+                </Popconfirm>
+              </div>
+            }
             extra={
               <span
                 style={{
                   display: "block",
                   marginTop: 4,
-                  fontSize: 12,
-                  lineHeight: 1.5,
                 }}
               >
                 {text(
@@ -380,6 +600,7 @@ export function SocialTriggerSettingsPanel() {
             }
           >
             <Select
+              id="social-trigger-scope"
               aria-label={text("scope")}
               value={scope}
               options={scopes.map((value) => ({
@@ -475,16 +696,6 @@ export function SocialTriggerSettingsPanel() {
           />
         ) : (
           <>
-            <Space style={{ marginBottom: 20 }} wrap>
-              <Popconfirm
-                title={text("resetConfirm")}
-                onConfirm={() => void save(true)}
-              >
-                <Button size="small" disabled={!overrideCount || saving}>
-                  {scope === "defaults" ? text("resetDefaults") : text("reset")}
-                </Button>
-              </Popconfirm>
-            </Space>
             {scope === "groups" &&
               group &&
               Object.keys(group.agentSettings.overrides).length > 0 && (
@@ -546,6 +757,15 @@ export function SocialTriggerSettingsPanel() {
                 )}
               </Space>
             )}
+            {selected?.policy.blockedTerms !== undefined && (
+              <Form.Item
+                name="blockedTerms"
+                label={label("blockedTerms")}
+                extra={text("blockedTermsHelp")}
+              >
+                <BlockedTermsEditor />
+              </Form.Item>
+            )}
             <Form.Item
               name="mode"
               label={label("mode")}
@@ -563,49 +783,53 @@ export function SocialTriggerSettingsPanel() {
             </Form.Item>
             {mode === "smart" && (
               <>
-                {data.decisionModelSupported && (
-                  <Form.Item
-                    name="decisionModelEnabled"
-                    label={label("decisionModelEnabled")}
-                    valuePropName="checked"
-                    extra={text("modelHelp")}
-                  >
-                    <Switch />
-                  </Form.Item>
-                )}
-                {modelEnabled && data.decisionModelSupported && (
-                  <>
-                    {data.decisionModelConfigured === false && (
-                      <Alert
-                        style={{ marginBottom: 16 }}
-                        type="info"
-                        showIcon
-                        message={text("modelUnavailable")}
-                      />
-                    )}
-                    <div style={grid}>
-                      {number("decisionModelTimeoutMs", 0, 3000)}
-                      {number(
-                        "decisionModelMaxCallsPerDay",
-                        0,
-                        100000,
-                        1,
-                        "modelBudgetHelp",
-                      )}
-                    </div>
-                  </>
-                )}
-                {number("smartScoreThreshold", 0, 100, 100, "thresholdHelp")}
+                <p
+                  className={styles.description}
+                  style={{ margin: "-8px 0 16px" }}
+                >
+                  {text("smartHelp")}
+                </p>
+                <Form.Item
+                  name="decisionModelEnabled"
+                  label={label("decisionModelEnabled")}
+                  valuePropName="checked"
+                  extra={text(
+                    !data.decisionModelSupported
+                      ? "modelUnsupported"
+                      : !modelEnabled
+                      ? "modelOffHelp"
+                      : data.decisionModelConfigured === false
+                      ? "modelUnavailable"
+                      : "modelHelp",
+                  )}
+                >
+                  <Switch disabled={!data.decisionModelSupported} />
+                </Form.Item>
+                {showModelOptions &&
+                  number(
+                    "decisionModelMaxCallsPerDay",
+                    0,
+                    100000,
+                    1,
+                    "modelBudgetHelp",
+                  )}
+                {number("smartScoreThreshold", 0, 100, 100)}
               </>
             )}
-            {(mode === "smart" || mode === "probability") &&
-              number(
-                "replyProbability",
-                0,
-                100,
-                100,
-                mode === "smart" ? "smartProbabilityHelp" : "probabilityHelp",
-              )}
+            {mode === "probability" && (
+              <p
+                className={styles.description}
+                style={{ margin: "-8px 0 16px" }}
+              >
+                {text("probabilityHelp")}
+              </p>
+            )}
+            {(mode === "smart" || mode === "probability") && (
+              <div style={showModelOptions ? grid : undefined}>
+                {number("replyProbability", 0, 100, 100)}
+                {showModelOptions && number("decisionModelTimeoutMs", 0, 3000)}
+              </div>
+            )}
             {automatic && (
               <>
                 <h5

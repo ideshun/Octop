@@ -10,6 +10,7 @@ export interface PluginConfigField {
 }
 
 export interface SocialTriggerPolicy {
+  blockedTerms?: string[];
   mode: "disabled" | "mention_only" | "smart" | "probability" | "always";
   replyProbability: number;
   smartScoreThreshold: number;

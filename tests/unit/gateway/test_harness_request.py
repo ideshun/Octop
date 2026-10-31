@@ -73,6 +73,43 @@ async def test_group_context_is_rendered_as_background_inside_current_turn() -> 
 
 
 @pytest.mark.asyncio
+async def test_automatic_group_turn_can_choose_silence() -> None:
+    msg = InboundMessage(
+        channel_id="qq-1",
+        channel_type="qq",
+        channel_subject=ChannelSubject(subject_id="group-1", chat_type="group"),
+        content=[TextContent(text="hello")],
+        metadata={"sender_id": "member", "social_trigger_auto": True},
+        group_context=GroupContext(
+            conversation_id="group-1", visibility="all", activation="mention"
+        ),
+    )
+
+    content = await build_content_from_message(msg, locale="zh")
+    assert "【当前群消息｜自动参与】" in content
+    assert "[NO_REPLY]" in content
+    assert "请回复这条消息" not in content
+
+
+@pytest.mark.asyncio
+async def test_guarded_group_mention_can_use_no_reply_marker() -> None:
+    msg = InboundMessage(
+        channel_id="qq-1",
+        channel_type="qq",
+        channel_subject=ChannelSubject(subject_id="group-1", chat_type="group"),
+        content=[TextContent(text="hello")],
+        metadata={"sender_id": "member", "social_trigger_output_guard": True},
+        group_context=GroupContext(
+            conversation_id="group-1", visibility="all", activation="mention"
+        ),
+    )
+
+    content = await build_content_from_message(msg, locale="zh")
+    assert "请回复这条消息" in content
+    assert "[NO_REPLY]" in content
+
+
+@pytest.mark.asyncio
 async def test_mention_only_still_attributes_the_current_group_sender() -> None:
     msg = InboundMessage(
         channel_id="qq-1",

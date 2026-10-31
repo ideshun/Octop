@@ -74,6 +74,7 @@ class SocialTriggerSettingsBody(BaseModel):
         "groupAgents"
     )
     reset: bool = False
+    blockedTerms: list[str] | None = Field(default=None, max_length=5000)
     mode: Literal["disabled", "mention_only", "smart", "probability", "always"] | None = None
     replyProbability: float | None = Field(default=None, ge=0, le=1)
     smartScoreThreshold: float | None = Field(default=None, ge=0, le=1)
@@ -149,17 +150,18 @@ def _social_trigger(server: OctopServer) -> Any:
     from octop_harness.plugins import PluginRegistry
 
     plugin = PluginRegistry().get("octop-social-trigger")
+    inbound_handlers = getattr(plugin, "inbound", None)
     if (
-        not plugin
-        or len(plugin.inbound) != 1
-        or not callable(getattr(plugin.inbound[0], "update_settings", None))
+        not isinstance(inbound_handlers, list)
+        or len(inbound_handlers) != 1
+        or not callable(getattr(inbound_handlers[0], "update_settings", None))
     ):
         raise OctopError(ErrorCode.NOT_FOUND, "请先启用并加载群聊自动参与插件", status=404)
-    if getattr(plugin.inbound[0], "settings_version", 1) < 2:
+    if getattr(inbound_handlers[0], "settings_version", 1) < 2:
         raise OctopError(
             ErrorCode.NOT_FOUND, "请更新群聊自动参与插件后重载，以使用跨通道设置", status=409
         )
-    return plugin.inbound[0]
+    return inbound_handlers[0]
 
 
 @router.get(

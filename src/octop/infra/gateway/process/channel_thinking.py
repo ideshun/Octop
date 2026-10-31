@@ -20,9 +20,14 @@ def install_channel_thinking_clean() -> None:
 
     def _clean_output(self: BaseChannel, text: str) -> str:  # noqa: ANN001
         constraints = self.constraints
+        should_show_thinking = getattr(self, "should_show_thinking", None)
         return prepare_channel_text(
             text,
-            show_thinking=bool(constraints.show_thinking),
+            show_thinking=(
+                bool(should_show_thinking())
+                if callable(should_show_thinking)
+                else bool(constraints.show_thinking)
+            ),
             thinking_template=str(
                 getattr(constraints, "thinking_template", None) or "💭 Thinking: {content}"
             ),

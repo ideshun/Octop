@@ -94,11 +94,19 @@ def _group_turn_text(
     context_header = (
         "【群聊背景｜仅供参考】" if language == "zh" else "[Group context | reference only]"
     )
-    current_header = (
-        "【当前群消息｜请回复这条消息】"
-        if language == "zh"
-        else "[Current group message | reply to this]"
-    )
+    automatic = msg.metadata.get("social_trigger_auto") is True
+    if automatic:
+        current_header = (
+            "【当前群消息｜自动参与】"
+            if language == "zh"
+            else "[Current group message | automatic participation]"
+        )
+    else:
+        current_header = (
+            "【当前群消息｜请回复这条消息】"
+            if language == "zh"
+            else "[Current group message | reply to this]"
+        )
 
     lines: list[str] = []
     if context.messages:
@@ -128,6 +136,30 @@ def _group_turn_text(
             f"[{sender_label(sender_id, sender_name)}] {current_text}",
         ]
     )
+    if automatic:
+        lines.extend(
+            [
+                "",
+                (
+                    "【自动参与提示】只在能提供有帮助的回复时发言；否则仅输出 [NO_REPLY]，不要输出括号中的状态或动作。"
+                    if language == "zh"
+                    else "[Automatic participation] Reply only if helpful; otherwise output only [NO_REPLY], "
+                    "without a parenthesized status or action."
+                ),
+            ]
+        )
+    elif msg.metadata.get("social_trigger_output_guard") is True:
+        lines.extend(
+            [
+                "",
+                (
+                    "【群回复提示】只输出发给群成员的正文；若不应回复，仅输出 [NO_REPLY]，不要输出括号中的状态或动作。"
+                    if language == "zh"
+                    else "[Group reply] Output only the message for the group. If no reply is appropriate, "
+                    "output only [NO_REPLY], without a parenthesized status or action."
+                ),
+            ]
+        )
     return "\n".join(lines)
 
 
