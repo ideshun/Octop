@@ -51,8 +51,15 @@ jobs:
       - name: Install dependencies
         run: make install
 
+      - name: Install Fork channel sources for integration tests
+        run: |
+          git clone --depth 1 --branch develop https://github.com/ideshun/octop-gateway.git .fork-gateway
+          uv pip install --python .venv/bin/python --no-deps --editable .fork-gateway
+          git clone --depth 1 --branch develop https://github.com/ideshun/octop-harness.git .fork-harness
+          uv pip install --python .venv/bin/python --no-deps --editable .fork-harness
+
       - name: Run tests
-        run: make test
+        run: make test RUN="uv run --no-sync"
 
       - name: Build package
         run: make build

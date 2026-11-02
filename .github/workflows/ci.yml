@@ -38,8 +38,16 @@ jobs:
       - name: Type check
         run: make typecheck
 
+      - name: Install Fork channel sources for integration tests
+        shell: bash
+        run: |
+          git clone --depth 1 --branch develop https://github.com/ideshun/octop-gateway.git .fork-gateway
+          uv pip install --python .venv/bin/python --no-deps --editable .fork-gateway
+          git clone --depth 1 --branch develop https://github.com/ideshun/octop-harness.git .fork-harness
+          uv pip install --python .venv/bin/python --no-deps --editable .fork-harness
+
       - name: Test
-        run: make test
+        run: make test RUN="uv run --no-sync"
 
   test-windows:
     name: Windows / Python 3.12
@@ -62,8 +70,16 @@ jobs:
       - name: Type check
         run: make typecheck
 
+      - name: Install Fork channel sources for integration tests
+        shell: bash
+        run: |
+          git clone --depth 1 --branch develop https://github.com/ideshun/octop-gateway.git .fork-gateway
+          uv pip install --python .venv/Scripts/python.exe --no-deps --editable .fork-gateway
+          git clone --depth 1 --branch develop https://github.com/ideshun/octop-harness.git .fork-harness
+          uv pip install --python .venv/Scripts/python.exe --no-deps --editable .fork-harness
+
       - name: Test
-        run: make test
+        run: make test RUN="uv run --no-sync"
 
   live-tests:
     name: "Live tests (real credentials)"
@@ -82,6 +98,14 @@ jobs:
 
       - name: Install dependencies
         run: make install
+
+      - name: Install Fork channel sources for integration tests
+        shell: bash
+        run: |
+          git clone --depth 1 --branch develop https://github.com/ideshun/octop-gateway.git .fork-gateway
+          uv pip install --python .venv/bin/python --no-deps --editable .fork-gateway
+          git clone --depth 1 --branch develop https://github.com/ideshun/octop-harness.git .fork-harness
+          uv pip install --python .venv/bin/python --no-deps --editable .fork-harness
 
       # Secrets are injected as env vars. Missing secrets => empty values =>
       # the live tests auto-skip (CI stays green). Never `echo`/print secrets.
@@ -126,4 +150,4 @@ jobs:
           WEIXIN_BASE_URL: ${{ secrets.LIVE_WEIXIN_BASE_URL }}
           FEISHU_APP_ID: ${{ secrets.LIVE_FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.LIVE_FEISHU_APP_SECRET }}
-        run: make test-live
+        run: make test-live RUN="uv run --no-sync"
