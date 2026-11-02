@@ -51,6 +51,11 @@ jobs:
       - name: Install dependencies
         run: make install
 
+      - name: Install Fork Gateway source for integration tests
+        run: |
+          git clone --depth 1 --branch develop https://github.com/ideshun/octop-gateway.git .fork-gateway
+          uv pip install --python .venv/bin/python --no-deps --editable .fork-gateway
+
       - name: Run tests
         run: make test
 
