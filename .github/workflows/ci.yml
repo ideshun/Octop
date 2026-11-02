@@ -38,11 +38,13 @@ jobs:
       - name: Type check
         run: make typecheck
 
-      - name: Install Fork Gateway source for integration tests
+      - name: Install Fork channel sources for integration tests
         shell: bash
         run: |
           git clone --depth 1 --branch develop https://github.com/ideshun/octop-gateway.git .fork-gateway
           uv pip install --python .venv/bin/python --no-deps --editable .fork-gateway
+          git clone --depth 1 --branch develop https://github.com/ideshun/octop-harness.git .fork-harness
+          uv pip install --python .venv/bin/python --no-deps --editable .fork-harness
 
       - name: Test
         run: make test RUN="uv run --no-sync"
@@ -68,11 +70,13 @@ jobs:
       - name: Type check
         run: make typecheck
 
-      - name: Install Fork Gateway source for integration tests
+      - name: Install Fork channel sources for integration tests
         shell: bash
         run: |
           git clone --depth 1 --branch develop https://github.com/ideshun/octop-gateway.git .fork-gateway
           uv pip install --python .venv/Scripts/python.exe --no-deps --editable .fork-gateway
+          git clone --depth 1 --branch develop https://github.com/ideshun/octop-harness.git .fork-harness
+          uv pip install --python .venv/Scripts/python.exe --no-deps --editable .fork-harness
 
       - name: Test
         run: make test RUN="uv run --no-sync"
@@ -95,11 +99,13 @@ jobs:
       - name: Install dependencies
         run: make install
 
-      - name: Install Fork Gateway source for integration tests
+      - name: Install Fork channel sources for integration tests
         shell: bash
         run: |
           git clone --depth 1 --branch develop https://github.com/ideshun/octop-gateway.git .fork-gateway
           uv pip install --python .venv/bin/python --no-deps --editable .fork-gateway
+          git clone --depth 1 --branch develop https://github.com/ideshun/octop-harness.git .fork-harness
+          uv pip install --python .venv/bin/python --no-deps --editable .fork-harness
 
       # Secrets are injected as env vars. Missing secrets => empty values =>
       # the live tests auto-skip (CI stays green). Never `echo`/print secrets.
