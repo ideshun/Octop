@@ -57,7 +57,7 @@ jobs:
           uv pip install --python .venv/bin/python --no-deps --editable .fork-gateway
 
       - name: Run tests
-        run: make test
+        run: make test RUN="uv run --no-sync"
 
       - name: Build package
         run: make build
