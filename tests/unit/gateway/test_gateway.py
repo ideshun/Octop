@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -55,6 +56,59 @@ async def test_gateway_boot_and_shutdown(tmp_path: Path) -> None:
         await gw.shutdown()
         assert gw._channel_manager is None
         await registry.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_builtin_command_is_processed_while_chat_is_busy(tmp_path: Path) -> None:
+    from octop_gateway.channels.qq import QQChannel, QQConfig
+    from octop_gateway.models import MessageEvent
+
+    services = _make_services(tmp_path)
+    started, release, status_seen = (asyncio.Event() for _ in range(3))
+
+    async def processor(message):
+        if message.text == "work":
+            started.set()
+            await release.wait()
+        elif message.text == "/status":
+            status_seen.set()
+        yield MessageEvent.completed()
+
+    with patch("octop.infra.agents.manager.HarnessAgentManager") as harness:
+        harness.return_value = MagicMock()
+        registry = AgentManager(repos=services.repos, paths=services.paths, config=services.config)
+        await registry.boot()
+        gateway = Gateway(agent_manager=registry, repos=services.repos)
+        await gateway.boot()
+        channel = QQChannel(
+            processor,
+            config=QQConfig(app_id="offline", secret="offline", channel_id="test-qq"),
+        )
+        channel.start, channel.stop = AsyncMock(), AsyncMock()
+        channel._send_typing_indicator = AsyncMock()
+        try:
+            manager = gateway._require_channel_manager()
+            await manager.add_channel(channel)
+            for content in ("work", "/status"):
+                manager.enqueue(
+                    channel.channel_id,
+                    {
+                        "t": "C2C_MESSAGE_CREATE",
+                        "d": {
+                            "id": content,
+                            "content": content,
+                            "author": {"user_openid": "member"},
+                        },
+                    },
+                )
+                if content == "work":
+                    await asyncio.wait_for(started.wait(), 1)
+            await asyncio.wait_for(status_seen.wait(), 1)
+            assert not release.is_set()
+        finally:
+            release.set()
+            await gateway.shutdown()
+            await registry.shutdown()
 
 
 @pytest.mark.asyncio

@@ -251,8 +251,17 @@ class Gateway:
         from octop.infra.gateway.channels.telegram_bridge import is_telegram_button_reply
 
         self._channel_manager = ChannelManager(
-            channels={}, control_message_predicate=is_telegram_button_reply
+            channels={},
+            control_message_predicate=lambda message: (
+                is_telegram_button_reply(message) or self._is_builtin_command(message)
+            ),
+            interrupt_message_predicate=self._is_stop_command,
         )
+        set_priority = getattr(self._channel_manager, "set_priority_message_predicate", None)
+        if callable(set_priority):
+            set_priority(self._is_builtin_command)
+        else:
+            logger.warning("Gateway lacks native command priority; update octop-gateway")
         self._bind_plugin_inbound(self._channel_manager)
         self._channel_manager.set_pre_lock_handler(self._preempt_cancel_on_stop)
         await self._channel_manager.start()
@@ -598,6 +607,21 @@ class Gateway:
         if self._channel_manager is None:
             raise RuntimeError("gateway not booted")
         return self._channel_manager
+
+    @staticmethod
+    def _is_builtin_command(message: Any) -> bool:
+        from octop.infra.gateway.slash.catalog import spec_for
+        from octop.infra.gateway.slash.parser import parse_slash
+
+        cmd = parse_slash(getattr(message, "text", None))
+        return cmd is not None and spec_for(cmd.name) is not None
+
+    @staticmethod
+    def _is_stop_command(message: Any) -> bool:
+        from octop.infra.gateway.slash.parser import parse_slash
+
+        cmd = parse_slash(getattr(message, "text", None))
+        return cmd is not None and cmd.name in ("stop", "cancel")
 
     async def _preempt_cancel_on_stop(self, _channel_id: str, message: Any) -> None:
         """Signal harness cancel for ``/stop`` / ``/cancel`` before the session lock.
