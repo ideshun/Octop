@@ -18,6 +18,7 @@ import { useTranslation } from "react-i18next";
 import type { FormInstance } from "antd";
 import type { Rule } from "antd/es/form";
 import { QRCodeSVG } from "qrcode.react";
+import cx from "classnames";
 import {
   isPluginChannelKind,
   CHANNEL_FIELDS,
@@ -318,9 +319,11 @@ function PolicyTagGroup<T extends string>({
         return (
           <button
             key={option.value}
-            className={`${styles.qqGroupPolicyTag} ${
-              checked ? styles.qqGroupPolicyTagChecked : ""
-            } ${option.disabled ? styles.qqGroupPolicyTagDisabled : ""}`}
+            className={cx(
+              styles.qqGroupPolicyTag,
+              checked && styles.qqGroupPolicyTagChecked,
+              option.disabled && styles.qqGroupPolicyTagDisabled,
+            )}
             type="button"
             role="radio"
             aria-checked={checked}
