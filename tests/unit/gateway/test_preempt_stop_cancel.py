@@ -19,6 +19,25 @@ from octop.infra.gateway.process.message_keys import session_key_from_message
 from octop.infra.gateway.threads import ThreadRegistry
 
 
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("/help", True),
+        ("/status", True),
+        ("/models", True),
+        ("/new", True),
+        ("/stop", True),
+        ("/cancel", True),
+        ("/unknown_command", False),
+        ("/opt/app", False),
+        ("hello /help", False),
+    ],
+)
+def test_only_registered_builtin_commands_use_priority(text: str, expected: bool) -> None:
+    msg = InboundMessage(channel_id="test", content=[TextContent(text=text)])
+    assert Gateway._is_builtin_command(msg) is expected
+
+
 @pytest.mark.asyncio
 async def test_preempt_cancel_on_stop_calls_cancel_stream(tmp_path: Path) -> None:
     db = SqlitePool(tmp_path / "gw.db")
