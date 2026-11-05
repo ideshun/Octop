@@ -1,6 +1,6 @@
-"""Fill in OpenSandbox filesystem helpers until octop-harness ships them.
+"""Compatibility filesystem helpers for older OpenSandbox backends.
 
-Pinned harness builds have ``execute`` but not ``mkdir_path``, ``delete_path``,
+Older harness builds have ``execute`` but not ``mkdir_path``, ``delete_path``,
 or ``move_path``, and no host mount. ``BackendWorkspace`` then raises
 ``BackendOperationNotSupportedError`` for bootstrap, skill removal, and rename.
 Each helper is attached only when the installed class does not already have it.

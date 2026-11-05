@@ -15,7 +15,7 @@
 <p align="center">
   <a href="https://www.python.org/downloads/"><img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-blue?logo=python&logoColor=white" /></a>
   <a href="https://github.com/TencentCloud/Octop/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green" /></a>
-  <a href="https://github.com/TencentCloud/Octop/releases"><img alt="Version" src="https://img.shields.io/badge/version-1.0.3b2-orange" /></a>
+  <a href="https://github.com/TencentCloud/Octop/releases"><img alt="Version" src="https://img.shields.io/badge/version-1.0.3b3-orange" /></a>
   <a href="https://pypi.org/project/octop/"><img src="https://img.shields.io/pypi/v/octop" alt="PyPI" /></a>
   <a href="https://github.com/astral-sh/ruff"><img alt="Code Style: Ruff" src="https://img.shields.io/badge/code%20style-ruff-000000?logo=ruff&logoColor=white" /></a>
   <a href="https://github.com/TencentCloud/Octop"><img alt="GitHub stars" src="https://img.shields.io/github/stars/TencentCloud/Octop?style=social" /></a>
@@ -336,7 +336,7 @@ docker run -d \
   - [参与贡献](#-参与贡献)
   - [更新日志](#-更新日志)
   - [相关项目](#-相关项目)
-  - [客户企业微信群](#-客户企业微信群)
+  - [社区](#-社区)
   - [许可证](#-许可证)
 
 ## 📦 安装方式
@@ -569,7 +569,17 @@ cd dashboard && npx tsc -b
 | [Octop Memory](https://github.com/TencentCloud/octop-memory) | 层级召回与全文搜索 |
 | [Octop Browser](https://github.com/TencentCloud/octop-browser) | CDP 浏览器自动化，支持 profile 持久登录 |
 
-## 💬 客户企业微信群
+## 💬 社区
+
+### 微信
+
+微信搜一搜「腾讯Octop」，或扫码：
+
+<p align="center">
+  <img src="docs/assets/wechat-octop.png" alt="微信搜一搜腾讯Octop" width="480" />
+</p>
+
+### 客户企业微信群
 
 如需加入客户企业微信服务群，请扫码：
 
