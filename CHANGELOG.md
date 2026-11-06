@@ -6,6 +6,9 @@
 
 ## [Unreleased]
 
+- Attach QQ quote context only when assembling model input, preserving slash command routing.
+
+
 ### 新增
 - 工作台增加云主机页：授权腾讯云后查看 CVM 实例总览、单机指标与趋势，并由常驻运维专家做巡检、诊断和风险门控变更
 
