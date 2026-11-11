@@ -207,7 +207,7 @@ def pending_hitl_payload(
     *,
     thread_id: str,
     agent_id: str,
-    user_id: int,
+    user_id: int | None,
 ) -> dict[str, Any] | None:
     record = store.resolve_pending_for_thread(
         thread_id,
@@ -557,7 +557,6 @@ class HitlChannelCoordinator:
         locale: str,
         usage_tracker: UsageTracker | None = None,
         outcome: HitlSlashOutcome | None = None,
-        history_factory: Any | None = None,
         history_finalize: Any | None = None,
         member_hitl: Callable[[str, list[dict[str, Any]]], bool] | None = None,
     ) -> AsyncIterator[MessageEvent]:
@@ -577,7 +576,6 @@ class HitlChannelCoordinator:
             sticky="once",
             usage_tracker=usage_tracker,
             outcome=outcome,
-            history_factory=history_factory,
             history_finalize=history_finalize,
             member_hitl=member_hitl,
         ):
@@ -592,7 +590,6 @@ class HitlChannelCoordinator:
         locale: str,
         usage_tracker: UsageTracker | None = None,
         outcome: HitlSlashOutcome | None = None,
-        history_factory: Any | None = None,
         history_finalize: Any | None = None,
         member_hitl: Callable[[str, list[dict[str, Any]]], bool] | None = None,
     ) -> AsyncIterator[MessageEvent]:
@@ -615,7 +612,6 @@ class HitlChannelCoordinator:
             sticky=sticky,
             usage_tracker=usage_tracker,
             outcome=outcome,
-            history_factory=history_factory,
             history_finalize=history_finalize,
             member_hitl=member_hitl,
         ):
@@ -632,7 +628,6 @@ class HitlChannelCoordinator:
         sticky: ApprovalSticky,
         usage_tracker: UsageTracker | None,
         outcome: HitlSlashOutcome | None,
-        history_factory: Any | None,
         history_finalize: Any | None,
         member_hitl: Callable[[str, list[dict[str, Any]]], bool] | None,
     ) -> AsyncIterator[MessageEvent]:
@@ -681,12 +676,9 @@ class HitlChannelCoordinator:
             StreamProjectionState,
             project_resume_stream,
         )
+        from octop.infra.history.projection import TurnHistoryTracker
 
-        history_tracker = (
-            await history_factory(ctx.agent_id, thread_id, {}, resume=True)
-            if history_factory
-            else None
-        )
+        history_tracker = TurnHistoryTracker.from_request({}) if history_finalize else None
         tracker = usage_tracker or UsageTracker()
         projection_state = StreamProjectionState()
         history_completed = False
