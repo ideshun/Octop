@@ -254,15 +254,16 @@ async def project_stream(
 ) -> AsyncIterator[MessageEvent]:
     del media_backend  # IM tool media uses agent.backend directly
     thread_id = hitl_ctx.thread_id if hitl_ctx is not None else ""
-    source = _with_session_auto_approve(
-        agent_manager.stream(agent_id, request),
+    source = agent_manager.stream(agent_id, request)
+    chunks = _with_session_auto_approve(
+        source,
         agent_manager=agent_manager,
         agent_id=agent_id,
         thread_id=thread_id,
         hitl_coordinator=hitl_coordinator,
     )
     chunk_stream = _project_chunks(
-        source,
+        chunks,
         agent_manager=agent_manager,
         agent_id=agent_id,
         locale=locale,
@@ -277,6 +278,8 @@ async def project_stream(
             yield ev
     finally:
         await close_event_stream(chunk_stream)
+        if chunks is not source:
+            await close_event_stream(chunks)
         await close_event_stream(source)
 
 
@@ -293,15 +296,16 @@ async def project_resume_stream(
     hitl_coordinator: HitlChannelCoordinator | None = None,
     hitl_ctx: HitlStreamContext | None = None,
 ) -> AsyncIterator[MessageEvent]:
-    source = _with_session_auto_approve(
-        agent_manager.resume_hitl(agent_id, thread_id, decisions),
+    source = agent_manager.resume_hitl(agent_id, thread_id, decisions)
+    chunks = _with_session_auto_approve(
+        source,
         agent_manager=agent_manager,
         agent_id=agent_id,
         thread_id=thread_id,
         hitl_coordinator=hitl_coordinator,
     )
     chunk_stream = _project_chunks(
-        source,
+        chunks,
         agent_manager=agent_manager,
         agent_id=agent_id,
         locale=locale,
@@ -316,4 +320,6 @@ async def project_resume_stream(
             yield ev
     finally:
         await close_event_stream(chunk_stream)
+        if chunks is not source:
+            await close_event_stream(chunks)
         await close_event_stream(source)
