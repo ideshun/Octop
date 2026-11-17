@@ -53,6 +53,7 @@ import { PluginIconView } from "./PluginIconView";
 import { PluginGroupTag } from "./PluginGroupTag";
 import { PluginCardMeta } from "./PluginCardMeta";
 import { SocialTriggerSettingsPanel } from "./SocialTriggerSettings";
+import { PluginSettingsPanel } from "./PluginSettingsPanel";
 import { notifyPluginsChanged, PLUGINS_CHANGED_EVENT } from "./pluginsEvents";
 
 const { Text, Paragraph } = Typography;
@@ -618,8 +619,12 @@ export function InstalledPluginsPanel() {
               />
             </div>
 
-            {detail.id === "octop-social-trigger" &&
-              detail.enabled !== false && <SocialTriggerSettingsPanel />}
+            {detail.enabled !== false &&
+              (detail.settings_ui?.entry ? (
+                <PluginSettingsPanel plugin={detail} />
+              ) : detail.id === "octop-social-trigger" ? (
+                <SocialTriggerSettingsPanel />
+              ) : null)}
 
             <ResourceVisibilityCollapse
               allowOwner={false}

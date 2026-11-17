@@ -14,6 +14,27 @@ from octop.infra.gateway.process.harness_request import build_content_from_messa
 
 
 @pytest.mark.asyncio
+async def test_generic_inbound_text_extension_has_no_plugin_field_contract(monkeypatch):
+    from types import SimpleNamespace
+
+    from octop_harness.plugins import PluginRegistry
+
+    seen = []
+
+    def render(message, current_text, *, background, locale):
+        seen.append((current_text, background, locale))
+        return "custom-text: " + current_text
+
+    monkeypatch.setattr(
+        PluginRegistry, "all_inbound", lambda _: [SimpleNamespace(render_inbound_text=render)]
+    )
+    message = InboundMessage(channel_id="sample", content=[TextContent(text="hello")])
+    assert await build_content_from_message(message, locale="zh") == "custom-text: hello"
+    assert seen == [("hello", [], "zh")]
+    assert message.text == "hello"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("channel_type", ["telegram", "qq"])
 @pytest.mark.parametrize("locale,label", [("en", "[Quoted message]"), ("zh", "[引用消息]")])
 @pytest.mark.parametrize(

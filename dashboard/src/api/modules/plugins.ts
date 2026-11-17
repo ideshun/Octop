@@ -89,6 +89,7 @@ export interface SocialTriggerSettings {
 }
 
 export interface InstalledPlugin {
+  settings_ui?: { entry: string; manifest?: string } | null;
   id: string;
   version?: string;
   name?: string;

@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+- 支持通用插件设置提供者、插件自带设置界面和入站文本渲染扩展；宿主只负责权限、通用上下文和桥接，不定义插件业务字段，旧版专用设置入口保留兼容。
+
 - Attach QQ quote context only when assembling model input, preserving slash command routing.
 - 群聊自动参与配置扩展为多通道分层继承，按通道/机器人/群/专家选择，支持恢复继承和按模式展示设置项。
 
