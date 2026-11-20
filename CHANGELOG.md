@@ -6,6 +6,7 @@
 
 ## [Unreleased]
 
+- 新增 `Slack`（`slack`）与 `WhatsApp`（`whatsapp`，同时支持 Meta 官方 Cloud API 与自建 WAHA / Evolution API 个人号扫码桥接）IM 通道支持：包含控制台图标、配置表单、免 JWT 的平台 Webhook 验签入口（`/api/channels/webhook/whatsapp/{channel_id}`、`/api/channels/webhook/slack/{channel_id}`）、自建桥接扫码获取与轮询接口（`/api/agents/{agent_id}/channels/whatsapp/qrcode/{generate,poll}`）、引用消息上下文注入，以及 `octop migrate openclaw/hermes` 通道迁移支持。
 - 支持通用插件设置提供者、插件自带设置界面和入站文本渲染扩展；宿主只负责权限、通用上下文和桥接，不定义插件业务字段，旧版专用设置入口保留兼容。
 
 - Attach QQ quote context only when assembling model input, preserving slash command routing.

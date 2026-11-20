@@ -7,6 +7,7 @@ import {
   partitionChannelKeys,
   CHANNEL_KEYS,
   CHANNEL_FIELDS,
+  hasRequiredCredentials,
   normalizeChannelFieldValue,
   replacePluginChannelKinds,
   CHANNEL_LABELS,
@@ -209,6 +210,36 @@ describe("Telegram configuration", () => {
     expect(() =>
       normalizeChannelFieldValue("allowed_user_ids", "-42"),
     ).toThrow();
+  });
+});
+
+describe("Slack and WhatsApp configuration", () => {
+  it("exposes Slack and dual-mode WhatsApp in more channels", () => {
+    expect(CHANNEL_KEYS).toContain("slack");
+    expect(CHANNEL_KEYS).toContain("whatsapp");
+    expect(partitionChannelKeys(["slack", "whatsapp"], new Set()).more).toEqual(
+      ["slack", "whatsapp"],
+    );
+    expect(hasRequiredCredentials("slack", { bot_token: "xoxb-123" })).toBe(
+      true,
+    );
+    expect(hasRequiredCredentials("slack", {})).toBe(false);
+    expect(
+      hasRequiredCredentials("whatsapp", {
+        provider: "cloud",
+        access_token: "EAAB",
+        phone_number_id: "123",
+      }),
+    ).toBe(true);
+    expect(
+      hasRequiredCredentials("whatsapp", {
+        provider: "waha",
+        bridge_url: "http://127.0.0.1:3000",
+      }),
+    ).toBe(true);
+    expect(hasRequiredCredentials("whatsapp", { provider: "waha" })).toBe(
+      false,
+    );
   });
 });
 
