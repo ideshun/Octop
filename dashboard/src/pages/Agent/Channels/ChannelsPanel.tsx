@@ -20,6 +20,10 @@ import {
   CHANNEL_DISPLAY_CONFIG_KEYS,
   CHANNEL_FIELDS,
   DEFAULT_QQ_GROUP_CONTEXT_CONFIG,
+  GROUP_POLICY_CHANNELS,
+  WHATSAPP_CLOUD_ONLY_FIELDS,
+  WHATSAPP_BRIDGE_ONLY_FIELDS,
+  defaultGroupContextConfigForKind,
   normalizeChannelFieldValue,
   normalizeQqGroupContextConfig,
   partitionChannelKeys,
@@ -51,6 +55,12 @@ function configFromFormValues(
   };
   const fields = CHANNEL_FIELDS[values.kind as ChannelKey];
   const hasSchema = !!fields && fields.length > 0;
+  const whatsappProvider =
+    values.kind === "whatsapp"
+      ? String(values.provider ?? "cloud")
+          .trim()
+          .toLowerCase()
+      : "";
   if (hasSchema) {
     for (const [k, v] of Object.entries(values)) {
       if (
@@ -65,8 +75,22 @@ function configFromFormValues(
       ) {
         continue;
       }
+      if (values.kind === "whatsapp") {
+        if (
+          whatsappProvider === "cloud" &&
+          WHATSAPP_BRIDGE_ONLY_FIELDS.has(k)
+        ) {
+          continue;
+        }
+        if (whatsappProvider !== "cloud" && WHATSAPP_CLOUD_ONLY_FIELDS.has(k)) {
+          continue;
+        }
+        if (whatsappProvider === "evolution" && k === "use_websocket") {
+          continue;
+        }
+      }
       if (v === undefined || v === null || v === "") continue;
-      config[k] = normalizeChannelFieldValue(k, v);
+      config[k] = normalizeChannelFieldValue(k, v, values.kind);
     }
   } else if (__raw_config !== undefined) {
     const trimmed = __raw_config.trim();
@@ -195,26 +219,31 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
     void refreshPluginKinds();
   }, [refreshPluginKinds]);
 
+  const catalogKeys = useMemo(
+    () => (catalogVersion >= 0 ? [...CHANNEL_KEYS] : []),
+    [catalogVersion],
+  );
+
   const channelByKind = useMemo<Map<ChannelKey, ChannelRow>>(() => {
     const map = new Map<ChannelKey, ChannelRow>();
     for (const row of channels) {
       const key = row.kind as ChannelKey;
-      if (!CHANNEL_KEYS.includes(key)) continue;
+      if (!catalogKeys.includes(key)) continue;
       const existing = map.get(key);
       if (!existing || (!existing.enabled && row.enabled)) {
         map.set(key, row);
       }
     }
     return map;
-  }, [channels, catalogVersion]);
+  }, [channels, catalogKeys]);
 
   const { featuredChannelKeys, moreChannelKeys } = useMemo(() => {
     const { featured, more } = partitionChannelKeys(
-      CHANNEL_KEYS,
+      catalogKeys,
       new Set(channelByKind.keys()),
     );
     return { featuredChannelKeys: featured, moreChannelKeys: more };
-  }, [channelByKind]);
+  }, [channelByKind, catalogKeys]);
 
   const visibleChannelKeys = showMoreChannels
     ? [...featuredChannelKeys, ...moreChannelKeys]
@@ -246,6 +275,8 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
                 owner_tools_only: true,
               },
             }
+          : GROUP_POLICY_CHANNELS.includes(kind)
+          ? { group_context: defaultGroupContextConfigForKind(kind) }
           : {}),
       };
       setDrawerInitialValues(defaults);
@@ -284,16 +315,21 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
             continue;
           }
           if (
-            (row.kind === "discord" || row.kind === "telegram") &&
+            (row.kind === "discord" ||
+              row.kind === "telegram" ||
+              row.kind === "slack" ||
+              row.kind === "whatsapp") &&
             (k === "allowed_channel_ids" ||
               k === "allowed_user_ids" ||
-              k === "allowed_chat_ids") &&
+              k === "allowed_chat_ids" ||
+              k === "allowed_group_ids") &&
             Array.isArray(v)
           ) {
             formCfg[k] = v.join("\n");
           } else if (k === "group_context") {
-            formCfg[k] =
-              row.kind === "qq" ? normalizeQqGroupContextConfig(v) : v;
+            formCfg[k] = GROUP_POLICY_CHANNELS.includes(row.kind as ChannelKey)
+              ? normalizeQqGroupContextConfig(v, row.kind)
+              : v;
           } else if (
             CHANNEL_FIELDS[row.kind as ChannelKey]?.some(
               (field) => field.name === k && field.type === "switch",
@@ -313,8 +349,11 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
         ) {
           formCfg.secret = formCfg.client_secret;
         }
-        if (row.kind === "qq" && !formCfg.group_context) {
-          formCfg.group_context = { ...DEFAULT_QQ_GROUP_CONTEXT_CONFIG };
+        if (
+          GROUP_POLICY_CHANNELS.includes(row.kind as ChannelKey) &&
+          !formCfg.group_context
+        ) {
+          formCfg.group_context = defaultGroupContextConfigForKind(row.kind);
         }
         const next: ChannelFormValues = {
           kind: row.kind as ChannelKey,

@@ -54,7 +54,10 @@ export const CHANNEL_KEYS: ChannelKey[] = [
   "mqtt",
 ];
 
-/** Overseas / less-common kinds hidden behind "更多通道" until expanded. */
+/** Maximum number of channels shown directly before folding excess into "更多通道". */
+export const DEFAULT_VISIBLE_CHANNEL_LIMIT = 16;
+
+/** Overseas / less-common kinds folded first when total channels exceed DEFAULT_VISIBLE_CHANNEL_LIMIT. */
 const COLLAPSED_CHANNEL_KEYS = new Set<ChannelKey>([
   "telegram",
   "discord",
@@ -67,17 +70,46 @@ export function isCollapsedChannelKey(key: ChannelKey): boolean {
 }
 
 /**
- * Split catalogue into default-visible vs collapsed. Already-configured
- * collapsed kinds stay visible so operators can manage them without expanding.
+ * Split catalogue into default-visible vs collapsed.
+ *
+ * When total channels do not exceed ``maxVisible`` (default 16), all channels
+ * are shown directly with no collapse toggle. When total channels exceed
+ * ``maxVisible``, already-configured channels always stay visible, non-collapsed
+ * channels fill remaining slots first, and only the overflow beyond ``maxVisible``
+ * is placed in ``more``.
  */
 export function partitionChannelKeys(
   keys: readonly ChannelKey[],
   configuredKinds: ReadonlySet<ChannelKey>,
+  maxVisible: number = DEFAULT_VISIBLE_CHANNEL_LIMIT,
 ): { featured: ChannelKey[]; more: ChannelKey[] } {
+  if (keys.length <= maxVisible) {
+    return { featured: [...keys], more: [] };
+  }
+
+  const featuredSet = new Set<ChannelKey>();
+  for (const key of keys) {
+    if (configuredKinds.has(key)) {
+      featuredSet.add(key);
+    }
+  }
+  for (const key of keys) {
+    if (featuredSet.size >= maxVisible) break;
+    if (!featuredSet.has(key) && !isCollapsedChannelKey(key)) {
+      featuredSet.add(key);
+    }
+  }
+  for (const key of keys) {
+    if (featuredSet.size >= maxVisible) break;
+    if (!featuredSet.has(key)) {
+      featuredSet.add(key);
+    }
+  }
+
   const featured: ChannelKey[] = [];
   const more: ChannelKey[] = [];
   for (const key of keys) {
-    if (!isCollapsedChannelKey(key) || configuredKinds.has(key)) {
+    if (featuredSet.has(key)) {
       featured.push(key);
     } else {
       more.push(key);
@@ -175,7 +207,8 @@ export const CHANNEL_URLS: Partial<Record<ChannelKey, string>> = {
   qq: "https://q.qq.com/qqbot/openclaw/",
   discord: "https://discord.com/developers/applications",
   slack: "https://api.slack.com/apps",
-  whatsapp: "https://developers.facebook.com/apps/",
+  whatsapp:
+    "https://developers.facebook.com/documentation/business-messaging/whatsapp/get-started",
   yuanbao: "https://yuanbao.tencent.com/bot",
   wecom: "https://work.weixin.qq.com/wework_admin/frame#/aiHelper/create",
   telegram: "https://t.me/BotFather",
@@ -231,6 +264,31 @@ export interface QqGroupContextConfig {
   >;
 }
 
+export const GROUP_POLICY_CHANNELS: readonly ChannelKey[] = [
+  "qq",
+  "slack",
+  "whatsapp",
+  "discord",
+  "feishu",
+  "dingtalk",
+  "wecom",
+];
+
+export const WHATSAPP_CLOUD_ONLY_FIELDS = new Set<string>([
+  "access_token",
+  "phone_number_id",
+  "business_account_id",
+  "verify_token",
+  "app_secret",
+]);
+
+export const WHATSAPP_BRIDGE_ONLY_FIELDS = new Set<string>([
+  "bridge_url",
+  "bridge_api_key",
+  "session_name",
+  "use_websocket",
+]);
+
 export const DEFAULT_QQ_GROUP_CONTEXT_CONFIG: QqGroupContextConfig = {
   enabled: true,
   visibility: "auto",
@@ -245,31 +303,47 @@ export const DEFAULT_QQ_GROUP_CONTEXT_CONFIG: QqGroupContextConfig = {
   owner_ids: [],
 };
 
+export function defaultGroupContextConfigForKind(
+  kind?: string,
+): QqGroupContextConfig {
+  if (!kind || kind === "qq") {
+    return { ...DEFAULT_QQ_GROUP_CONTEXT_CONFIG };
+  }
+  return {
+    ...DEFAULT_QQ_GROUP_CONTEXT_CONFIG,
+    visibility: "all",
+    owner_commands_only: false,
+    owner_tools_only: false,
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Normalize saved config and old JSON form drafts into the typed QQ policy. */
+/** Normalize saved config and old JSON form drafts into the typed group policy. */
 export function normalizeQqGroupContextConfig(
   value: unknown,
+  kind?: string,
 ): QqGroupContextConfig {
+  const defaults = defaultGroupContextConfigForKind(kind);
   let parsed = value;
   if (typeof parsed === "string") {
     try {
       parsed = JSON.parse(parsed) as unknown;
     } catch {
-      return { ...DEFAULT_QQ_GROUP_CONTEXT_CONFIG };
+      return defaults;
     }
   }
   if (!isRecord(parsed)) {
-    return { ...DEFAULT_QQ_GROUP_CONTEXT_CONFIG };
+    return defaults;
   }
 
   const visibility = QQ_GROUP_VISIBILITIES.includes(
     parsed.visibility as QqGroupVisibility,
   )
     ? (parsed.visibility as QqGroupVisibility)
-    : DEFAULT_QQ_GROUP_CONTEXT_CONFIG.visibility;
+    : defaults.visibility;
   const activation =
     parsed.activation === "always" ? "always" : ("mention" as const);
   const rawLimit = Number(parsed.history_limit);
@@ -284,9 +358,7 @@ export function normalizeQqGroupContextConfig(
   return {
     ...parsed,
     enabled:
-      typeof parsed.enabled === "boolean"
-        ? parsed.enabled
-        : DEFAULT_QQ_GROUP_CONTEXT_CONFIG.enabled,
+      typeof parsed.enabled === "boolean" ? parsed.enabled : defaults.enabled,
     visibility,
     activation: visibility === "all" ? activation : "mention",
     history:
@@ -297,26 +369,26 @@ export function normalizeQqGroupContextConfig(
         : "recent",
     history_limit: Number.isFinite(rawLimit)
       ? Math.max(0, Math.trunc(rawLimit))
-      : DEFAULT_QQ_GROUP_CONTEXT_CONFIG.history_limit,
+      : defaults.history_limit,
     history_ttl_seconds: Number.isFinite(rawTtl)
       ? Math.max(0, rawTtl)
-      : DEFAULT_QQ_GROUP_CONTEXT_CONFIG.history_ttl_seconds,
+      : defaults.history_ttl_seconds,
     clear_after_reply:
       typeof parsed.clear_after_reply === "boolean"
         ? parsed.clear_after_reply
-        : DEFAULT_QQ_GROUP_CONTEXT_CONFIG.clear_after_reply,
+        : defaults.clear_after_reply,
     owner_commands_only:
       typeof parsed.owner_commands_only === "boolean"
         ? parsed.owner_commands_only
-        : DEFAULT_QQ_GROUP_CONTEXT_CONFIG.owner_commands_only,
+        : defaults.owner_commands_only,
     owner_tools_only:
       typeof parsed.owner_tools_only === "boolean"
         ? parsed.owner_tools_only
-        : false,
+        : defaults.owner_tools_only,
     social_trigger_enabled:
       typeof parsed.social_trigger_enabled === "boolean"
         ? parsed.social_trigger_enabled
-        : DEFAULT_QQ_GROUP_CONTEXT_CONFIG.social_trigger_enabled,
+        : defaults.social_trigger_enabled,
     owner_ids: [
       ...new Set(
         rawOwnerIds
@@ -335,6 +407,15 @@ export function normalizeQqGroupContextConfig(
  */
 export const CHANNEL_FIELDS: Partial<Record<ChannelKey, ChannelField[]>> = {
   feishu: [
+    {
+      name: "domain",
+      label: "channels.feishuDomain",
+      type: "select",
+      options: ["feishu", "lark"],
+      defaultValue: "feishu",
+      legacyDefaultValue: "feishu",
+      helpKey: "channels.feishuDomainHelp",
+    },
     { name: "app_id", label: "App ID", placeholder: "cli_xxx", required: true },
     {
       name: "app_secret",
@@ -342,10 +423,14 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelKey, ChannelField[]>> = {
       type: "password",
       required: true,
     },
-    { name: "encrypt_key", label: "Encrypt Key", type: "password" },
+    {
+      name: "encrypt_key",
+      label: "channels.feishuEncryptKey",
+      type: "password",
+    },
     {
       name: "verification_token",
-      label: "Verification Token",
+      label: "channels.feishuVerificationToken",
       type: "password",
     },
   ],
@@ -390,18 +475,26 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelKey, ChannelField[]>> = {
       type: "textarea",
     },
     {
+      name: "allow_all_dms",
+      label: "channels.discordAllowAllDms",
+      type: "switch",
+      defaultValue: false,
+      legacyDefaultValue: false,
+      helpKey: "channels.discordAllowAllDmsHelp",
+    },
+    {
       name: "allowed_user_ids",
       label: "channels.discordAllowedUsers",
       type: "textarea",
     },
     {
       name: "http_proxy",
-      label: "HTTP Proxy",
+      label: "channels.httpProxy",
       placeholder: "http://127.0.0.1:18118",
     },
     {
       name: "http_proxy_auth",
-      label: "HTTP Proxy Auth",
+      label: "channels.httpProxyAuth",
       type: "password",
       placeholder: "user:password",
     },
@@ -413,17 +506,66 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelKey, ChannelField[]>> = {
       type: "password",
       placeholder: "xoxb-...",
       required: true,
+      helpKey: "channels.slackBotTokenHelp",
     },
     {
       name: "app_token",
-      label: "App-Level Token (Socket Mode)",
+      label: "channels.slackAppToken",
       type: "password",
       placeholder: "xapp-...",
+      helpKey: "channels.slackAppTokenHelp",
     },
     {
       name: "signing_secret",
-      label: "Signing Secret",
+      label: "channels.slackSigningSecret",
       type: "password",
+      helpKey: "channels.slackSigningSecretHelp",
+    },
+    {
+      name: "owner_only",
+      label: "channels.channelOwnerOnly",
+      type: "switch",
+      defaultValue: false,
+      legacyDefaultValue: false,
+      helpKey: "channels.channelOwnerOnlyHelp",
+    },
+    {
+      name: "allow_all_channels",
+      label: "channels.slackAllowAllChannels",
+      type: "switch",
+      defaultValue: true,
+      legacyDefaultValue: true,
+      helpKey: "channels.slackAllowAllChannelsHelp",
+    },
+    {
+      name: "allowed_channel_ids",
+      label: "channels.slackAllowedChannels",
+      type: "textarea",
+      placeholder: "C0123456789, G0123456789",
+      helpKey: "channels.slackAllowedChannelsHelp",
+    },
+    {
+      name: "allow_all_dms",
+      label: "channels.slackAllowAllDms",
+      type: "switch",
+      defaultValue: true,
+      legacyDefaultValue: true,
+      helpKey: "channels.slackAllowAllDmsHelp",
+    },
+    {
+      name: "allowed_user_ids",
+      label: "channels.slackAllowedUsers",
+      type: "textarea",
+      placeholder: "U0123456789, U9876543210",
+      helpKey: "channels.slackAllowedUsersHelp",
+    },
+    {
+      name: "ignore_mention_all",
+      label: "channels.ignoreMentionAll",
+      type: "switch",
+      defaultValue: false,
+      legacyDefaultValue: false,
+      helpKey: "channels.ignoreMentionAllHelp",
     },
     {
       name: "reply_in_thread",
@@ -431,17 +573,36 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelKey, ChannelField[]>> = {
       type: "switch",
       defaultValue: true,
       legacyDefaultValue: true,
+      helpKey: "channels.slackReplyInThreadHelp",
     },
     {
       name: "thread_isolation",
-      label: "channels.telegram_topic_isolation",
+      label: "channels.slackThreadIsolation",
       type: "switch",
       defaultValue: false,
       legacyDefaultValue: false,
+      helpKey: "channels.slackThreadIsolationHelp",
+    },
+    {
+      name: "streaming_mode",
+      label: "channels.slackStreamingMode",
+      type: "select",
+      options: ["off", "edit"],
+      defaultValue: "off",
+      legacyDefaultValue: "off",
+      helpKey: "channels.slackStreamingModeHelp",
+    },
+    {
+      name: "status_reactions",
+      label: "channels.telegram_status_reactions",
+      type: "switch",
+      defaultValue: false,
+      legacyDefaultValue: false,
+      helpKey: "channels.statusReactionsHelp",
     },
     {
       name: "http_proxy",
-      label: "HTTP Proxy",
+      label: "channels.httpProxy",
       placeholder: "http://127.0.0.1:18118",
     },
   ],
@@ -457,34 +618,46 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelKey, ChannelField[]>> = {
     },
     {
       name: "access_token",
-      label: "Access Token (Cloud API)",
+      label: "channels.whatsappAccessToken",
       type: "password",
       placeholder: "EAAB...",
+      helpKey: "channels.whatsappAccessTokenHelp",
     },
     {
       name: "phone_number_id",
-      label: "Phone Number ID (Cloud API)",
+      label: "channels.whatsappPhoneNumberId",
       placeholder: "109876543210",
+      helpKey: "channels.whatsappPhoneNumberIdHelp",
+    },
+    {
+      name: "business_account_id",
+      label: "channels.whatsappBusinessAccountId",
+      placeholder: "1029384756",
+      helpKey: "channels.whatsappBusinessAccountIdHelp",
     },
     {
       name: "verify_token",
-      label: "Webhook Verify Token",
+      label: "channels.whatsappVerifyToken",
       type: "password",
+      helpKey: "channels.whatsappVerifyTokenHelp",
     },
     {
       name: "app_secret",
-      label: "App Secret (Cloud API)",
+      label: "channels.whatsappAppSecret",
       type: "password",
+      helpKey: "channels.whatsappAppSecretHelp",
     },
     {
       name: "bridge_url",
       label: "channels.whatsappBridgeUrl",
       placeholder: "http://127.0.0.1:3000",
+      helpKey: "channels.whatsappBridgeUrlHelp",
     },
     {
       name: "bridge_api_key",
       label: "channels.whatsappBridgeApiKey",
       type: "password",
+      helpKey: "channels.whatsappBridgeApiKeyHelp",
     },
     {
       name: "session_name",
@@ -492,6 +665,61 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelKey, ChannelField[]>> = {
       placeholder: "default",
       defaultValue: "default",
       legacyDefaultValue: "default",
+      helpKey: "channels.whatsappSessionNameHelp",
+    },
+    {
+      name: "use_websocket",
+      label: "channels.whatsappUseWebsocket",
+      type: "switch",
+      defaultValue: true,
+      legacyDefaultValue: true,
+      helpKey: "channels.whatsappUseWebsocketHelp",
+    },
+    {
+      name: "owner_only",
+      label: "channels.channelOwnerOnly",
+      type: "switch",
+      defaultValue: false,
+      legacyDefaultValue: false,
+      helpKey: "channels.channelOwnerOnlyHelp",
+    },
+    {
+      name: "allow_all_dms",
+      label: "channels.whatsappAllowAllDms",
+      type: "switch",
+      defaultValue: true,
+      legacyDefaultValue: true,
+      helpKey: "channels.whatsappAllowAllDmsHelp",
+    },
+    {
+      name: "allowed_user_ids",
+      label: "channels.whatsappAllowedUsers",
+      type: "textarea",
+      placeholder: "+8613800138000, 8613900001111@c.us",
+      helpKey: "channels.whatsappAllowedUsersHelp",
+    },
+    {
+      name: "allow_all_groups",
+      label: "channels.whatsappAllowAllGroups",
+      type: "switch",
+      defaultValue: true,
+      legacyDefaultValue: true,
+      helpKey: "channels.whatsappAllowAllGroupsHelp",
+    },
+    {
+      name: "allowed_group_ids",
+      label: "channels.whatsappAllowedGroups",
+      type: "textarea",
+      placeholder: "1203630123456789@g.us",
+      helpKey: "channels.whatsappAllowedGroupsHelp",
+    },
+    {
+      name: "ignore_mention_all",
+      label: "channels.ignoreMentionAll",
+      type: "switch",
+      defaultValue: false,
+      legacyDefaultValue: false,
+      helpKey: "channels.ignoreMentionAllHelp",
     },
     {
       name: "reply_to_message",
@@ -501,8 +729,24 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelKey, ChannelField[]>> = {
       legacyDefaultValue: true,
     },
     {
+      name: "show_typing",
+      label: "channels.whatsappShowTyping",
+      type: "switch",
+      defaultValue: true,
+      legacyDefaultValue: true,
+      helpKey: "channels.whatsappShowTypingHelp",
+    },
+    {
+      name: "status_reactions",
+      label: "channels.telegram_status_reactions",
+      type: "switch",
+      defaultValue: false,
+      legacyDefaultValue: false,
+      helpKey: "channels.statusReactionsHelp",
+    },
+    {
       name: "http_proxy",
-      label: "HTTP Proxy",
+      label: "channels.httpProxy",
       placeholder: "http://127.0.0.1:18118",
     },
   ],
@@ -526,7 +770,7 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelKey, ChannelField[]>> = {
     },
   ],
   weixin: [
-    { name: "bot_uin", label: "机器人 UIN", required: true },
+    { name: "bot_uin", label: "channels.weixinBotUin", required: true },
     { name: "token", label: "Token", type: "password", required: true },
     { name: "base_url", label: "Base URL" },
   ],
@@ -539,24 +783,24 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelKey, ChannelField[]>> = {
     { name: "sk", label: "Secret Key (SK)", type: "password", required: true },
     { name: "agent_id", label: "Agent ID", required: true },
     { name: "ws_url", label: "WebSocket URL" },
-    { name: "ws_url_backup", label: "备用 WebSocket URL" },
+    { name: "ws_url_backup", label: "channels.xiaoyiBackupWsUrl" },
   ],
   mqtt: [
-    { name: "host", label: "Broker Host", required: true },
-    { name: "port", label: "Port", placeholder: "8883" },
-    { name: "username", label: "Username" },
-    { name: "password", label: "Password", type: "password" },
+    { name: "host", label: "channels.mqttHost", required: true },
+    { name: "port", label: "channels.mqttPort", placeholder: "8883" },
+    { name: "username", label: "channels.mqttUsername" },
+    { name: "password", label: "channels.mqttPassword", type: "password" },
     {
       name: "subscribe_topic",
-      label: "Subscribe Topic",
+      label: "channels.mqttSubscribeTopic",
       placeholder: "devices/+/in",
     },
     {
       name: "publish_topic",
-      label: "Publish Topic",
+      label: "channels.mqttPublishTopic",
       placeholder: "devices/{client_id}/out",
     },
-    { name: "transport", label: "Transport", placeholder: "tcp" },
+    { name: "transport", label: "channels.mqttTransport", placeholder: "tcp" },
   ],
   telegram: [
     { name: "bot_token", label: "Bot Token", type: "password", required: true },
@@ -668,7 +912,7 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelKey, ChannelField[]>> = {
     },
     {
       name: "http_proxy",
-      label: "HTTP Proxy",
+      label: "channels.httpProxy",
       placeholder: "http://127.0.0.1:18118",
     },
   ],
@@ -707,11 +951,15 @@ export function applyQqChannelSaveConfig(
 export function normalizeChannelFieldValue(
   fieldName: string,
   value: unknown,
+  channelKind?: string,
 ): unknown {
   if (
-    ["allowed_channel_ids", "allowed_user_ids", "allowed_chat_ids"].includes(
-      fieldName,
-    )
+    [
+      "allowed_channel_ids",
+      "allowed_user_ids",
+      "allowed_chat_ids",
+      "allowed_group_ids",
+    ].includes(fieldName)
   ) {
     const entries = Array.isArray(value)
       ? value
@@ -719,15 +967,21 @@ export function normalizeChannelFieldValue(
           .trim()
           .split(/[,\s]+/)
           .filter(Boolean);
-    if (
-      entries.some(
-        (entry) =>
-          !(fieldName === "allowed_chat_ids" ? /^-?\d+$/ : /^\d+$/).test(
-            String(entry),
-          ),
-      )
-    ) {
-      throw new Error("Invalid channel ID");
+    const flexibleIds =
+      channelKind === "slack" ||
+      channelKind === "whatsapp" ||
+      fieldName === "allowed_group_ids";
+    if (!flexibleIds) {
+      if (
+        entries.some(
+          (entry) =>
+            !(fieldName === "allowed_chat_ids" ? /^-?\d+$/ : /^\d+$/).test(
+              String(entry),
+            ),
+        )
+      ) {
+        throw new Error("Invalid channel ID");
+      }
     }
     return [...new Set(entries.map(String))];
   }

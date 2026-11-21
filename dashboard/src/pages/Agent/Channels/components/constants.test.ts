@@ -14,14 +14,16 @@ import {
 } from "./constants";
 
 describe("Discord configuration", () => {
-  it("exposes Discord in more channels and keeps configured bots visible", () => {
+  it("exposes Discord directly within the 16-channel limit and keeps configured bots visible when overflowing", () => {
     expect(CHANNEL_KEYS).toContain("discord");
-    expect(partitionChannelKeys(["discord"], new Set()).more).toEqual([
-      "discord",
-    ]);
+    expect(partitionChannelKeys(["discord"], new Set())).toEqual({
+      featured: ["discord"],
+      more: [],
+    });
     expect(
-      partitionChannelKeys(["discord"], new Set(["discord"])).featured,
-    ).toEqual(["discord"]);
+      partitionChannelKeys(["weixin", "qq", "discord"], new Set(["discord"]), 2)
+        .featured,
+    ).toContain("discord");
     expect(
       CHANNEL_FIELDS.discord?.find((f) => f.name === "bot_token"),
     ).toMatchObject({ required: true, type: "password" });
@@ -48,22 +50,31 @@ describe("Discord configuration", () => {
 });
 
 describe("partitionChannelKeys", () => {
-  it("hides telegram until expanded unless already configured", () => {
-    expect(
-      partitionChannelKeys(["weixin", "telegram", "mqtt"], new Set()),
-    ).toEqual({
-      featured: ["weixin", "mqtt"],
-      more: ["telegram"],
-    });
-    expect(
-      partitionChannelKeys(
-        ["weixin", "telegram", "mqtt"],
-        new Set(["telegram"]),
-      ),
-    ).toEqual({
-      featured: ["weixin", "telegram", "mqtt"],
+  it("shows all channels when count is at most 16, and folds overflow beyond 16", () => {
+    expect(partitionChannelKeys(CHANNEL_KEYS, new Set())).toEqual({
+      featured: [...CHANNEL_KEYS],
       more: [],
     });
+    const seventeen = [
+      ...CHANNEL_KEYS,
+      "octo",
+      "plugin1",
+      "plugin2",
+      "plugin3",
+      "plugin4",
+    ] as (typeof CHANNEL_KEYS)[number][];
+    const split = partitionChannelKeys(seventeen, new Set());
+    expect(split.featured).toHaveLength(16);
+    expect(split.featured).toContain("octo");
+    expect(split.more).toEqual(["whatsapp"]);
+
+    const withConfigured = partitionChannelKeys(
+      seventeen,
+      new Set(["whatsapp"]),
+    );
+    expect(withConfigured.featured).toContain("whatsapp");
+    expect(withConfigured.featured).toHaveLength(16);
+    expect(withConfigured.more).toEqual(["slack"]);
   });
 });
 
@@ -214,12 +225,12 @@ describe("Telegram configuration", () => {
 });
 
 describe("Slack and WhatsApp configuration", () => {
-  it("exposes Slack and dual-mode WhatsApp in more channels", () => {
+  it("includes Slack and dual-mode WhatsApp in catalogue and validates credentials", () => {
     expect(CHANNEL_KEYS).toContain("slack");
     expect(CHANNEL_KEYS).toContain("whatsapp");
-    expect(partitionChannelKeys(["slack", "whatsapp"], new Set()).more).toEqual(
-      ["slack", "whatsapp"],
-    );
+    expect(
+      partitionChannelKeys(["slack", "whatsapp"], new Set()).featured,
+    ).toEqual(["slack", "whatsapp"]);
     expect(hasRequiredCredentials("slack", { bot_token: "xoxb-123" })).toBe(
       true,
     );
@@ -240,6 +251,18 @@ describe("Slack and WhatsApp configuration", () => {
     expect(hasRequiredCredentials("whatsapp", { provider: "waha" })).toBe(
       false,
     );
+    expect(normalizeQqGroupContextConfig(undefined, "qq")).toMatchObject({
+      visibility: "auto",
+      owner_commands_only: true,
+    });
+    expect(normalizeQqGroupContextConfig(undefined, "slack")).toMatchObject({
+      visibility: "all",
+      owner_commands_only: false,
+    });
+    expect(normalizeQqGroupContextConfig(undefined, "feishu")).toMatchObject({
+      visibility: "all",
+      owner_commands_only: false,
+    });
   });
 });
 

@@ -205,9 +205,6 @@ describe("<ChannelsPanel /> create-flow default", () => {
   it("defaults Discord to all channels and saves without channel IDs", async () => {
     render(<ChannelsPanel agentId="ag1" />);
     await userEvent.click(
-      await screen.findByRole("button", { name: /channels\.showMoreChannels/ }),
-    );
-    await userEvent.click(
       (await screen.findAllByText("channels.label_discord"))[0],
     );
     expect(
@@ -283,9 +280,6 @@ describe("<ChannelsPanel /> create-flow default", () => {
 
   it("opens Discord and saves the token with exact channel/user IDs", async () => {
     render(<ChannelsPanel agentId="ag1" />);
-    await userEvent.click(
-      await screen.findByRole("button", { name: /channels\.showMoreChannels/ }),
-    );
     await userEvent.click(
       (await screen.findAllByText("channels.label_discord"))[0],
     );
@@ -595,12 +589,6 @@ describe("<ChannelsPanel /> create-flow default", () => {
 
   async function openTelegramCreateDrawer() {
     render(<ChannelsPanel agentId="ag1" />);
-    // Telegram is collapsed behind "更多通道" until expanded.
-    await userEvent.click(
-      await screen.findByRole("button", {
-        name: /channels\.showMoreChannels/,
-      }),
-    );
     // telegram has no quick-config path -> clicking its card opens the
     // manual create drawer directly.
     const card = (await screen.findAllByText("channels.label_telegram"))[0];

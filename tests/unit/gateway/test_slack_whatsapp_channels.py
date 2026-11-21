@@ -183,5 +183,48 @@ async def test_slack_and_whatsapp_gateway_registration_and_webhooks(tmp_path, mo
         )
         slack_res = await slack_webhook_ingest("slack1", slack_req, server=fake_server)
         assert slack_res == {"challenge": "slack_chal"}
+
+        # Fail-closed when webhook secrets are unconfigured
+        from fastapi import HTTPException
+        from pydantic import ValidationError
+
+        from octop.api.routers.channels import WhatsAppBridgeQrBody
+
+        no_sec_slack = SlackChannel(
+            processor,
+            SlackConfig(bot_token="xoxb-2", channel_id="slack-nosec"),
+        )
+        no_sec_wa = WhatsAppChannel(
+            processor,
+            WhatsAppConfig(
+                provider="cloud",
+                access_token="EAAB",
+                phone_number_id="123",
+                channel_id="wa-nosec",
+            ),
+        )
+        manager._channels["slack-nosec"] = no_sec_slack
+        manager._channels["wa-nosec"] = no_sec_wa
+
+        with pytest.raises(HTTPException) as exc_slack:
+            await slack_webhook_ingest("slack-nosec", slack_req, server=fake_server)
+        assert exc_slack.value.status_code == 403
+
+        with pytest.raises(HTTPException) as exc_wa_get:
+            await whatsapp_webhook_verify(
+                "wa-nosec",
+                hub_mode="subscribe",
+                hub_verify_token="",
+                hub_challenge="chal",
+                server=fake_server,
+            )
+        assert exc_wa_get.value.status_code == 403
+
+        with pytest.raises(HTTPException) as exc_wa_post:
+            await whatsapp_webhook_ingest("wa-nosec", wa_req, server=fake_server)
+        assert exc_wa_post.value.status_code == 403
+
+        with pytest.raises(ValidationError):
+            WhatsAppBridgeQrBody(bridge_url="file:///etc/passwd")
     finally:
         await manager.stop()

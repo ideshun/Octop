@@ -30,7 +30,10 @@ import {
   CHANNEL_URLS,
   DEFAULT_CHANNEL_DISPLAY_CONFIG,
   applyQqChannelSaveConfig,
-  DEFAULT_QQ_GROUP_CONTEXT_CONFIG,
+  GROUP_POLICY_CHANNELS,
+  WHATSAPP_CLOUD_ONLY_FIELDS,
+  WHATSAPP_BRIDGE_ONLY_FIELDS,
+  defaultGroupContextConfigForKind,
   normalizeChannelFieldValue,
   normalizeQqGroupContextConfig,
   type ChannelField,
@@ -96,6 +99,21 @@ const QUICK_CONFIG_CHANNELS: ChannelKey[] = [
   "feishu",
   "yuanbao",
 ];
+
+const INITIAL_WA_QR_STATE = {
+  loading: false,
+  status: "",
+  qrcode: "",
+  connected: false,
+} as {
+  loading: boolean;
+  status: string;
+  qrcode: string;
+  connected: boolean;
+  accountId?: string;
+  pushName?: string;
+  error?: string;
+};
 
 const YUANBAO_DEFAULT_API_DOMAIN = "https://bot.yuanbao.tencent.com";
 const YUANBAO_DEFAULT_WS_URL =
@@ -178,10 +196,12 @@ export function FormItemForField({
   field,
   disabled = false,
   editing = false,
+  channelKind,
 }: {
   field: ChannelField;
   editing?: boolean;
   disabled?: boolean;
+  channelKind?: string;
 }) {
   const { t } = useTranslation();
   const label = field.label.startsWith("channels.")
@@ -248,7 +268,7 @@ export function FormItemForField({
       validator: async (_: unknown, value: unknown) => {
         if (!value) return;
         try {
-          normalizeChannelFieldValue(field.name, value);
+          normalizeChannelFieldValue(field.name, value, channelKind);
         } catch {
           throw new Error(
             t("channels.fieldMustBeJsonObject", { label: field.label }),
@@ -260,12 +280,13 @@ export function FormItemForField({
   if (
     field.name === "allowed_channel_ids" ||
     field.name === "allowed_user_ids" ||
-    field.name === "allowed_chat_ids"
+    field.name === "allowed_chat_ids" ||
+    field.name === "allowed_group_ids"
   ) {
     rules.push({
       validator: async (_: unknown, value: unknown) => {
         try {
-          normalizeChannelFieldValue(field.name, value);
+          normalizeChannelFieldValue(field.name, value, channelKind);
         } catch {
           throw new Error(
             t(
@@ -284,7 +305,7 @@ export function FormItemForField({
         disabled={disabled}
         placeholder={field.placeholder}
         {...(field.type === "textarea" || field.type === "json"
-          ? { rows: 5 }
+          ? { rows: 4 }
           : {})}
       />
     </Form.Item>
@@ -358,7 +379,15 @@ function PluginGroupSettingsFields({
     Form.useWatch(["group_context", "enabled"], form) ?? kind === "discord";
   return (
     <>
-      {["discord", "feishu", "telegram"].includes(kind) && (
+      {[
+        "discord",
+        "feishu",
+        "telegram",
+        "slack",
+        "whatsapp",
+        "dingtalk",
+        "wecom",
+      ].includes(kind) && (
         <>
           <Form.Item
             name={["group_context", "enabled"]}
@@ -432,18 +461,20 @@ function PluginGroupSettingsFields({
 function QqGroupContextPolicyFields({
   form,
   pluginChannelSettings,
+  kind = "qq",
 }: {
   form: FormInstance<ChannelFormValues>;
   pluginChannelSettings: PluginChannelSetting[];
+  kind?: string;
 }) {
   const { t, i18n } = useTranslation();
   const language = i18n?.resolvedLanguage?.startsWith("zh") ? "zh" : "en";
   useEffect(() => {
     form.setFieldValue(
       "group_context",
-      normalizeQqGroupContextConfig(form.getFieldValue("group_context")),
+      normalizeQqGroupContextConfig(form.getFieldValue("group_context"), kind),
     );
-  }, [form]);
+  }, [form, kind]);
   const watchedEnabled = Form.useWatch(["group_context", "enabled"], form);
   const watchedVisibility = Form.useWatch(
     ["group_context", "visibility"],
@@ -463,6 +494,7 @@ function QqGroupContextPolicyFields({
   );
   const policy = normalizeQqGroupContextConfig(
     form.getFieldValue("group_context"),
+    kind,
   );
   const enabled =
     typeof watchedEnabled === "boolean" ? watchedEnabled : policy.enabled;
@@ -481,7 +513,10 @@ function QqGroupContextPolicyFields({
 
   const updatePolicy = (patch: Partial<QqGroupContextConfig>) => {
     form.setFieldValue("group_context", {
-      ...normalizeQqGroupContextConfig(form.getFieldValue("group_context")),
+      ...normalizeQqGroupContextConfig(
+        form.getFieldValue("group_context"),
+        kind,
+      ),
       ...patch,
     });
   };
@@ -626,7 +661,11 @@ function QqGroupContextPolicyFields({
             label={t("channels.qqGroupOwnerIds")}
             extra={
               <div className={styles.qqGroupPolicyDescription}>
-                {t("channels.qqGroupOwnerIdsHelp")}
+                {t(
+                  kind === "qq"
+                    ? "channels.qqGroupOwnerIdsHelp"
+                    : "channels.groupOwnerIdsHelp",
+                )}
               </div>
             }
           >
@@ -743,8 +782,13 @@ export function ChannelDrawer({
   pluginChannelSettings = [],
 }: ChannelDrawerProps) {
   const { t } = useTranslation();
-  const allowAllDiscordChannels =
-    Form.useWatch("allow_all_channels", form) !== false;
+  const allowAllChannels = Form.useWatch("allow_all_channels", form) !== false;
+  const allowAllGroups = Form.useWatch("allow_all_groups", form) !== false;
+  const whatsappProvider = String(
+    Form.useWatch("provider", form) ?? "cloud",
+  ).toLowerCase();
+  const [waQrState, setWaQrState] = useState(INITIAL_WA_QR_STATE);
+  const waPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isEdit = editing !== null;
   const [selectedKind, setSelectedKind] = useState<ChannelKey>(
     initialValues?.kind ?? "feishu",
@@ -773,7 +817,83 @@ export function ChannelDrawer({
       clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
     }
+    if (waPollTimerRef.current) {
+      clearInterval(waPollTimerRef.current);
+      waPollTimerRef.current = null;
+    }
   }, []);
+
+  const startWhatsappBridgeQr = useCallback(async () => {
+    stopPolling();
+    const session = qrSessionRef.current;
+    const bridgeUrl = String(form.getFieldValue("bridge_url") ?? "").trim();
+    if (!bridgeUrl) {
+      setWaQrState({
+        loading: false,
+        status: "ERROR",
+        qrcode: "",
+        connected: false,
+        error: t("channels.whatsappBridgeUrlRequired"),
+      });
+      return;
+    }
+    const reqBody = {
+      bridge_url: bridgeUrl,
+      provider: whatsappProvider === "evolution" ? "evolution" : "waha",
+      session_name:
+        String(form.getFieldValue("session_name") ?? "default").trim() ||
+        "default",
+      bridge_api_key: String(form.getFieldValue("bridge_api_key") ?? "").trim(),
+    };
+    setWaQrState((prev) => ({ ...prev, loading: true, error: undefined }));
+    try {
+      const res = await channelApi.whatsappQrcodeGenerate(agentId, reqBody);
+      if (session !== qrSessionRef.current) return;
+      const isConnected =
+        res.status === "WORKING" ||
+        res.status === "CONNECTED" ||
+        res.status === "OPEN";
+      setWaQrState({
+        loading: false,
+        status: res.status,
+        qrcode: res.qrcode || "",
+        connected: isConnected,
+      });
+      if (!isConnected) {
+        waPollTimerRef.current = setInterval(async () => {
+          try {
+            const poll = await channelApi.whatsappQrcodePoll(agentId, reqBody);
+            if (session !== qrSessionRef.current) return;
+            if (poll.connected) {
+              if (waPollTimerRef.current) {
+                clearInterval(waPollTimerRef.current);
+                waPollTimerRef.current = null;
+              }
+              setWaQrState({
+                loading: false,
+                status: poll.status,
+                qrcode: "",
+                connected: true,
+                accountId: poll.account_id,
+                pushName: poll.push_name,
+              });
+            }
+          } catch {
+            // keep polling
+          }
+        }, 2500);
+      }
+    } catch (e: unknown) {
+      if (session !== qrSessionRef.current) return;
+      setWaQrState({
+        loading: false,
+        status: "ERROR",
+        qrcode: "",
+        connected: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }, [agentId, form, stopPolling, t, whatsappProvider]);
 
   useEffect(() => stopPolling, [stopPolling]);
 
@@ -782,7 +902,18 @@ export function ChannelDrawer({
     autoSaveTriggeredRef.current = false;
     setAutoSaveFailed(false);
     setQrState({ phase: "idle" });
+    setWaQrState(INITIAL_WA_QR_STATE);
   }, [stopPolling]);
+
+  useEffect(() => {
+    if (selectedKind !== "whatsapp") return;
+    if (waPollTimerRef.current) {
+      clearInterval(waPollTimerRef.current);
+      waPollTimerRef.current = null;
+    }
+    qrSessionRef.current += 1;
+    setWaQrState(INITIAL_WA_QR_STATE);
+  }, [selectedKind, whatsappProvider]);
 
   useEffect(() => {
     if (!open) {
@@ -1198,7 +1329,14 @@ export function ChannelDrawer({
   const hasSchema = !!fields && fields.length > 0;
   const labelKey = CHANNEL_LABEL_KEYS[selectedKind];
   const kindLabel = labelKey ? t(labelKey) : CHANNEL_LABELS[selectedKind];
-  const introUrl = CHANNEL_URLS[selectedKind];
+  const introUrl =
+    selectedKind === "whatsapp"
+      ? whatsappProvider === "waha"
+        ? "https://waha.devlike.pro/docs/overview/quick-start/"
+        : whatsappProvider === "evolution"
+        ? "https://github.com/evolution-foundation/evolution-api"
+        : CHANNEL_URLS.whatsapp
+      : CHANNEL_URLS[selectedKind];
 
   const getDisplayConfig = useCallback((): Pick<
     ChannelFormValues,
@@ -1228,7 +1366,7 @@ export function ChannelDrawer({
       };
       const groupPolicy = form.getFieldValue("group_context");
       if (
-        selectedKind !== "qq" &&
+        !GROUP_POLICY_CHANNELS.includes(selectedKind) &&
         groupPolicy &&
         typeof groupPolicy === "object"
       ) {
@@ -1243,9 +1381,11 @@ export function ChannelDrawer({
   const getQqGroupContextConfig = useCallback(
     () =>
       normalizeQqGroupContextConfig(
-        form.getFieldValue("group_context") ?? DEFAULT_QQ_GROUP_CONTEXT_CONFIG,
+        form.getFieldValue("group_context") ??
+          defaultGroupContextConfigForKind(selectedKind),
+        selectedKind,
       ),
-    [form],
+    [form, selectedKind],
   );
 
   const submitChannel = useCallback(
@@ -1441,6 +1581,12 @@ export function ChannelDrawer({
         show_tool_hints ?? DEFAULT_CHANNEL_DISPLAY_CONFIG.show_tool_hints,
     };
     if (hasSchema) {
+      const effectiveWaProvider =
+        kind === "whatsapp"
+          ? String(rest.provider ?? "cloud")
+              .trim()
+              .toLowerCase()
+          : "";
       for (const [k, v] of Object.entries(rest)) {
         if (
           k === "name" ||
@@ -1451,7 +1597,24 @@ export function ChannelDrawer({
         ) {
           continue;
         }
-        config[k] = normalizeChannelFieldValue(k, v);
+        if (kind === "whatsapp") {
+          if (
+            effectiveWaProvider === "cloud" &&
+            WHATSAPP_BRIDGE_ONLY_FIELDS.has(k)
+          ) {
+            continue;
+          }
+          if (
+            effectiveWaProvider !== "cloud" &&
+            WHATSAPP_CLOUD_ONLY_FIELDS.has(k)
+          ) {
+            continue;
+          }
+          if (effectiveWaProvider === "evolution" && k === "use_websocket") {
+            continue;
+          }
+        }
+        config[k] = normalizeChannelFieldValue(k, v, kind);
       }
     } else if (__raw_config !== undefined) {
       const trimmed = __raw_config.trim();
@@ -1466,7 +1629,9 @@ export function ChannelDrawer({
         }
       }
     }
-    if (kind === "qq") config.group_context = getQqGroupContextConfig();
+    if (GROUP_POLICY_CHANNELS.includes(kind)) {
+      config.group_context = getQqGroupContextConfig();
+    }
     config = mergeDisplayConfig(config);
     void (async () => {
       const ok = await onSubmit(kind, kind, config, values.enabled ?? false);
@@ -2136,10 +2301,13 @@ export function ChannelDrawer({
                 rules={[{ required: true }]}
               >
                 <Select
+                  aria-label={t("channels.channelType")}
                   disabled={isEdit}
                   options={CHANNEL_KEYS.map((k) => ({
                     value: k,
-                    label: CHANNEL_LABELS[k],
+                    label: CHANNEL_LABEL_KEYS[k]
+                      ? t(CHANNEL_LABEL_KEYS[k]!)
+                      : CHANNEL_LABELS[k],
                   }))}
                 />
               </Form.Item>
@@ -2166,19 +2334,58 @@ export function ChannelDrawer({
                   style={{ marginBottom: 16 }}
                 />
               )}
+              {selectedKind === "slack" && (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={t("channels.slackSetupHelp")}
+                  style={{ marginBottom: 16 }}
+                />
+              )}
+              {selectedKind === "whatsapp" && (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={t(
+                    whatsappProvider === "cloud"
+                      ? "channels.whatsappCloudSetupHelp"
+                      : "channels.whatsappBridgeSetupHelp",
+                  )}
+                  style={{ marginBottom: 16 }}
+                />
+              )}
               {hasSchema ? (
-                fields!.map((f) => (
-                  <FormItemForField
-                    key={f.name}
-                    field={f}
-                    editing={isEdit}
-                    disabled={
-                      selectedKind === "discord" &&
-                      f.name === "allowed_channel_ids" &&
-                      allowAllDiscordChannels
+                fields!
+                  .filter((f) => {
+                    if (selectedKind !== "whatsapp") return true;
+                    if (whatsappProvider === "cloud") {
+                      return !WHATSAPP_BRIDGE_ONLY_FIELDS.has(f.name);
                     }
-                  />
-                ))
+                    if (
+                      whatsappProvider === "evolution" &&
+                      f.name === "use_websocket"
+                    ) {
+                      return false;
+                    }
+                    return !WHATSAPP_CLOUD_ONLY_FIELDS.has(f.name);
+                  })
+                  .map((f) => (
+                    <FormItemForField
+                      key={f.name}
+                      field={f}
+                      editing={isEdit}
+                      channelKind={selectedKind}
+                      disabled={
+                        ((selectedKind === "discord" ||
+                          selectedKind === "slack") &&
+                          f.name === "allowed_channel_ids" &&
+                          allowAllChannels) ||
+                        (selectedKind === "whatsapp" &&
+                          f.name === "allowed_group_ids" &&
+                          allowAllGroups)
+                      }
+                    />
+                  ))
               ) : (
                 <Form.Item
                   name="__raw_config"
@@ -2215,11 +2422,81 @@ export function ChannelDrawer({
                   />
                 </Form.Item>
               )}
+              {selectedKind === "whatsapp" && whatsappProvider !== "cloud" && (
+                <div
+                  className={styles.qqGroupPolicy}
+                  style={{ marginBottom: 16 }}
+                >
+                  <div className={styles.qqGroupPolicyHeader}>
+                    <div>
+                      <div className={styles.qqGroupPolicyTitle}>
+                        {t("channels.whatsappBridgeQrTitle")}
+                      </div>
+                      <div className={styles.qqGroupPolicyDescription}>
+                        {t("channels.whatsappBridgeQrDesc")}
+                      </div>
+                    </div>
+                    <Button
+                      size="small"
+                      type="primary"
+                      loading={waQrState.loading}
+                      onClick={() => void startWhatsappBridgeQr()}
+                    >
+                      {t("channels.whatsappBridgeQrBtn")}
+                    </Button>
+                  </div>
+                  {waQrState.error && (
+                    <Alert
+                      type="error"
+                      showIcon
+                      message={waQrState.error}
+                      style={{ marginTop: 12 }}
+                    />
+                  )}
+                  {waQrState.connected && (
+                    <Alert
+                      type="success"
+                      showIcon
+                      message={t("channels.whatsappBridgeConnected", {
+                        account:
+                          waQrState.pushName ||
+                          waQrState.accountId ||
+                          waQrState.status,
+                      })}
+                      style={{ marginTop: 12 }}
+                    />
+                  )}
+                  {!waQrState.connected && waQrState.qrcode && (
+                    <div
+                      className={styles.qrCardWrap}
+                      style={{ marginTop: 12, textAlign: "center" }}
+                    >
+                      <div
+                        className={styles.qrFrame}
+                        style={{ display: "inline-block", padding: 12 }}
+                      >
+                        {waQrState.qrcode.startsWith("data:image/") ? (
+                          <img
+                            src={waQrState.qrcode}
+                            alt="WhatsApp QR"
+                            style={{ width: 190, height: 190 }}
+                          />
+                        ) : (
+                          <QRCodeSVG value={waQrState.qrcode} size={190} />
+                        )}
+                      </div>
+                      <p className={styles.qrScanHint}>
+                        {t("channels.whatsappBridgeQrScanHint")}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           )}
 
           <DisplaySettingsFields />
-          {selectedKind !== "qq" &&
+          {!GROUP_POLICY_CHANNELS.includes(selectedKind) &&
             pluginChannelSettings.some(
               (field) =>
                 field.channel_kind === "*" ||
@@ -2235,12 +2512,13 @@ export function ChannelDrawer({
                 )}
               />
             )}
-          {selectedKind === "qq" && (
+          {GROUP_POLICY_CHANNELS.includes(selectedKind) && (
             <QqGroupContextPolicyFields
               form={form}
+              kind={selectedKind}
               pluginChannelSettings={pluginChannelSettings.filter(
                 (field) =>
-                  (field.channel_kind ?? "qq") === "qq" ||
+                  (field.channel_kind ?? "qq") === selectedKind ||
                   field.channel_kind === "*",
               )}
             />

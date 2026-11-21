@@ -30,7 +30,9 @@ async function openDingtalkManual() {
 }
 
 async function selectKind(label: string) {
-  await userEvent.click(screen.getByRole("combobox"));
+  await userEvent.click(
+    screen.getByRole("combobox", { name: "channels.channelType" }),
+  );
   await userEvent.click(
     await screen.findByText(label, {
       selector: ".ant-select-item-option-content",
@@ -42,7 +44,7 @@ describe("channel QR lifecycle (#2314)", () => {
   it("preserves per-kind drafts and allows switching back while QR generation is pending", async () => {
     await openDingtalkManual();
     await userEvent.type(screen.getByLabelText("Client ID"), "dingtalk-client");
-    await selectKind("微信");
+    await selectKind("channels.label_weixin");
     expect(loadFormDraft("channel:new:dingtalk")).toMatchObject({
       kind: "dingtalk",
     });
@@ -54,7 +56,7 @@ describe("channel QR lifecycle (#2314)", () => {
         ),
       ).toHaveLength(1),
     );
-    await selectKind("钉钉");
+    await selectKind("channels.label_dingtalk");
     expect(screen.getByLabelText("Client ID")).toHaveValue("dingtalk-client");
     expect(
       screen.queryByText("channels.weixinQrStep1"),
@@ -92,7 +94,7 @@ describe("channel QR lifecycle (#2314)", () => {
       });
       interval = vi.spyOn(globalThis, "setInterval");
       await openDingtalkManual();
-      await selectKind("微信");
+      await selectKind("channels.label_weixin");
       await waitFor(() =>
         expect(
           api.mock.calls.filter(([url]) =>
@@ -136,7 +138,7 @@ describe("channel QR lifecycle (#2314)", () => {
     });
     interval = vi.spyOn(globalThis, "setInterval");
     await openDingtalkManual();
-    await selectKind("微信");
+    await selectKind("channels.label_weixin");
     await waitFor(() =>
       expect(interval).toHaveBeenCalledWith(expect.any(Function), 3000),
     );
@@ -147,7 +149,7 @@ describe("channel QR lifecycle (#2314)", () => {
     act(() => {
       pending = poll();
     });
-    await selectKind("钉钉");
+    await selectKind("channels.label_dingtalk");
     await act(async () => {
       resolvePoll({ status: "success", token: "stale-token" });
       await pending;

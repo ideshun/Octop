@@ -153,7 +153,7 @@ export function ChannelCard({
 
       <div className={styles.cardBottom}>{renderStatusBadge()}</div>
       {runtime?.last_inbound_at ? (
-        <p className={styles.cardDescription}>
+        <p className={styles.cardRuntimeMeta}>
           {t("channels.lastInbound", {
             time: new Date(runtime.last_inbound_at * 1000).toLocaleString(),
           })}

@@ -265,4 +265,46 @@ export const channelApi = {
       `/agents/${agentId}/channels/yuanbao/bot-creator/stop`,
       { method: "POST" },
     ),
+
+  /** Fetch or initialize a login QR code from a self-hosted WhatsApp bridge (WAHA / Evolution API). */
+  whatsappQrcodeGenerate: (
+    agentId: string,
+    body: {
+      bridge_url: string;
+      provider?: string;
+      session_name?: string;
+      bridge_api_key?: string;
+    },
+  ) =>
+    request<{
+      status: string;
+      qrcode: string;
+      session_name: string;
+      provider: string;
+    }>(`/agents/${agentId}/channels/whatsapp/qrcode/generate`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  /** Poll connection status of a self-hosted WhatsApp bridge session. */
+  whatsappQrcodePoll: (
+    agentId: string,
+    body: {
+      bridge_url: string;
+      provider?: string;
+      session_name?: string;
+      bridge_api_key?: string;
+    },
+  ) =>
+    request<{
+      connected: boolean;
+      status: string;
+      session_name: string;
+      provider: string;
+      account_id?: string;
+      push_name?: string;
+    }>(`/agents/${agentId}/channels/whatsapp/qrcode/poll`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };
