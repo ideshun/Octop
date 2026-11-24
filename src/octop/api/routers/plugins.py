@@ -57,6 +57,10 @@ _UI_CONTENT_TYPES = {
 
 class PluginInstallBody(BaseModel):
     url: str = Field(..., description="HTTP(S) URL to a plugin ZIP archive")
+    force: bool = Field(
+        default=False,
+        description="Overwrite an already-installed plugin with the same id",
+    )
 
 
 class SocialTriggerQuietHours(BaseModel):
@@ -344,7 +348,7 @@ async def install_plugin(
 ) -> dict[str, Any]:
     mgr = _plugin_manager(server)
     try:
-        loaded = await mgr.install_async("install_url", body.url)
+        loaded = await mgr.install_async("install_url", body.url, force=body.force)
     except OctopError:
         raise
     except Exception as exc:
