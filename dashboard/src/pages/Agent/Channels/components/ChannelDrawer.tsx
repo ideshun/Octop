@@ -222,6 +222,7 @@ export function FormItemForField({
   );
   const initialValue = editing ? field.legacyDefaultValue : field.defaultValue;
   if (field.type === "select") {
+    const optionPrefix = field.optionLabelPrefix ?? "channels.telegram_option_";
     return (
       <Form.Item
         name={field.name}
@@ -229,9 +230,10 @@ export function FormItemForField({
         initialValue={initialValue}
       >
         <Select
+          disabled={disabled}
           options={field.options?.map((value) => ({
             value,
-            label: t(`channels.telegram_option_${value}`),
+            label: t(`${optionPrefix}${value}`),
           }))}
         />
       </Form.Item>
@@ -245,7 +247,7 @@ export function FormItemForField({
         initialValue={initialValue}
         valuePropName="checked"
       >
-        <Switch />
+        <Switch disabled={disabled} />
       </Form.Item>
     );
   }
@@ -784,6 +786,7 @@ export function ChannelDrawer({
   const { t } = useTranslation();
   const allowAllChannels = Form.useWatch("allow_all_channels", form) !== false;
   const allowAllGroups = Form.useWatch("allow_all_groups", form) !== false;
+  const slackReplyInThread = Form.useWatch("reply_in_thread", form) !== false;
   const whatsappProvider = String(
     Form.useWatch("provider", form) ?? "cloud",
   ).toLowerCase();
@@ -2380,6 +2383,9 @@ export function ChannelDrawer({
                           selectedKind === "slack") &&
                           f.name === "allowed_channel_ids" &&
                           allowAllChannels) ||
+                        (selectedKind === "slack" &&
+                          f.name === "reply_broadcast" &&
+                          !slackReplyInThread) ||
                         (selectedKind === "whatsapp" &&
                           f.name === "allowed_group_ids" &&
                           allowAllGroups)
