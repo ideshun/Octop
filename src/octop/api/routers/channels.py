@@ -1250,11 +1250,7 @@ async def whatsapp_webhook_ingest(
         raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
 
     extract_fn = getattr(channel, "extract_webhook_messages", None)
-    events = (
-        extract_fn(payload)
-        if callable(extract_fn)
-        else ([payload] if isinstance(payload, dict) else [])
-    )
+    events = extract_fn(payload) if callable(extract_fn) else []
     for ev in events:
         if hasattr(channel, "note_inbound"):
             channel.note_inbound()
