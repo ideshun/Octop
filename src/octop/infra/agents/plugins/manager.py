@@ -13,9 +13,7 @@ import shutil
 import sys
 import tempfile
 import threading
-import time
 import urllib.error
-import urllib.request
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
@@ -33,6 +31,9 @@ from octop_harness.plugins import (
 )
 
 from octop.infra.agents.plugins.installation import (
+    MAX_ARCHIVE_BYTES,
+    MAX_EXTRACTED_BYTES,
+    download,
     install_dependencies,
 )
 from octop.infra.agents.plugins.legacy_imports import ensure_legacy_harness_agent_alias
@@ -60,7 +61,7 @@ PLUGINS_REVISION = "plugins.revision"
 
 _MAX_PLUGIN_ARCHIVE_BYTES = 100 * 1024 * 1024
 _MAX_PLUGIN_ZIP_ENTRIES = 2_000
-_MAX_PLUGIN_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
+_MAX_PLUGIN_UNCOMPRESSED_BYTES = MAX_EXTRACTED_BYTES
 _MAX_PLUGIN_MEMBER_BYTES = 64 * 1024 * 1024
 _MAX_PLUGIN_COMPRESSION_RATIO = 100.0
 _DOWNLOAD_CHUNK = 64 * 1024
@@ -198,50 +199,6 @@ def _validate_plugin_zip(zf: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
         ):
             raise _archive_error(f"plugin ZIP compression ratio is too high: {member.filename}")
     return infos
-
-
-def _download_plugin_archive(url: str, archive: Path) -> None:
-    try:
-        deadline = time.monotonic() + 120
-        with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310
-            content_length = response.headers.get("Content-Length")
-            if content_length is not None:
-                try:
-                    if int(content_length) > _MAX_PLUGIN_ARCHIVE_BYTES:
-                        raise _archive_error("plugin ZIP download exceeds the configured limit")
-                except ValueError:
-                    pass
-            total = 0
-            with archive.open("wb") as target:
-                while True:
-                    chunk = response.read(_DOWNLOAD_CHUNK)
-                    if not chunk:
-                        break
-                    if time.monotonic() > deadline:
-                        raise TimeoutError("plugin download exceeded total time budget")
-                    total += len(chunk)
-                    if total > _MAX_PLUGIN_ARCHIVE_BYTES:
-                        raise _archive_error("plugin ZIP download exceeds the configured limit")
-                    target.write(chunk)
-    except OctopError:
-        raise
-    except urllib.error.HTTPError as exc:
-        raise OctopError(
-            ErrorCode.PLUGIN_INSTALL_FAILED,
-            f"download failed with HTTP {exc.code}",
-            details={"reason": f"HTTP {exc.code}"},
-        ) from exc
-    except urllib.error.URLError as exc:
-        reason = getattr(exc, "reason", None) or str(exc)
-        raise OctopError(
-            ErrorCode.PLUGIN_INSTALL_FAILED,
-            f"download failed: {reason}",
-            details={"reason": str(reason)},
-        ) from exc
-    except OSError as exc:
-        raise OctopError(
-            ErrorCode.PLUGIN_INSTALL_FAILED, f"download failed: {exc}", details={"reason": str(exc)}
-        ) from exc
 
 
 def _read_plugin_yaml(plugin_dir: Path) -> dict[str, Any]:
@@ -431,8 +388,13 @@ class PluginManager:
                     manifest = PluginManifest.load(directory / "plugin.yaml")
                     if enabled.get(manifest.id, True):
                         install_dependencies(directory)
-                except Exception:
-                    logger.warning("failed to prepare plugin %s", directory.name, exc_info=True)
+                except Exception as exc:
+                    logger.error(
+                        "failed to prepare plugin reload from %s: %s",
+                        directory,
+                        exc,
+                        exc_info=True,
+                    )
 
         await asyncio.get_running_loop().run_in_executor(None, prepare)
 
@@ -717,7 +679,7 @@ class PluginManager:
                 ErrorCode.PLUGIN_INSTALL_FAILED,
                 f"marketplace plugin {plugin_id!r} has no archive",
             )
-        loaded = self.install_url(
+        return self.install_url(
             url,
             force=self._replace_market_release(
                 plugin_id,
@@ -728,7 +690,6 @@ class PluginManager:
             expect_version=catalog_version or None,
             persist_enabled=True,
         )
-        return loaded
 
     def _replace_market_release(self, plugin_id: str, version: str, *, force: bool) -> bool:
         """Replace disk contents when installing a different catalog release."""
@@ -995,9 +956,9 @@ class PluginManager:
         source: Path,
         *,
         force: bool = False,
-        persist_enabled: bool = False,
         expect_id: str | None = None,
         expect_version: str | None = None,
+        persist_enabled: bool = False,
     ) -> LoadedPlugin:
         self._ensure_plugin_cache()
         source = source.resolve()
@@ -1023,12 +984,12 @@ class PluginManager:
                 ErrorCode.PLUGIN_INVALID_ARCHIVE,
                 f"plugin version {manifest.version!r} does not match {expect_version!r}",
             )
-        dest = self._plugins_dir / manifest.id
         with self._install_guard:
             lock = self._install_locks.setdefault(manifest.id, threading.Lock())
         if not lock.acquire(blocking=False):
             raise OctopError(ErrorCode.PLUGIN_ALREADY_EXISTS, "plugin installation in progress")
         try:
+            dest = self._plugins_dir / manifest.id
             if dest.exists() and not force:
                 raise OctopError(
                     ErrorCode.PLUGIN_ALREADY_EXISTS,
@@ -1045,14 +1006,15 @@ class PluginManager:
                     old = PluginRegistry().get(manifest.id)
                     prefix = "harness_plugin_" + manifest.id.replace("-", "_")
                     modules = {
-                        k: v
-                        for k, v in sys.modules.copy().items()
-                        if k == prefix or k.startswith(prefix + ".")
+                        key: value
+                        for key, value in sys.modules.copy().items()
+                        if key == prefix or key.startswith(prefix + ".")
                     }
+                    had_existing = dest.exists()
                     moved_old = False
                     moved_new = False
                     try:
-                        if dest.exists():
+                        if had_existing:
                             dest.rename(backup)
                             moved_old = True
                         staged.rename(dest)
@@ -1062,9 +1024,9 @@ class PluginManager:
                         enabled = self.global_enabled_map().get(manifest.id, True)
                         if not enabled:
                             unload_plugin(manifest.id)
+                        self._persist_plugin_tree(manifest.id)
                         if persist_enabled:
                             self._set_enabled_flag(manifest.id, enabled)
-                        self._persist_plugin_tree(manifest.id)
                         return loaded
                     except Exception:
                         if moved_new:
@@ -1072,6 +1034,19 @@ class PluginManager:
                             dest.rename(staged)
                         if moved_old:
                             backup.rename(dest)
+                        if self._control_files is not None and (moved_old or moved_new):
+                            try:
+                                if had_existing:
+                                    self._persist_plugin_tree(manifest.id)
+                                else:
+                                    self._control_files.delete_owner(
+                                        ControlFileRepo.PLUGIN, manifest.id
+                                    )
+                                    self._bump_plugin_revision()
+                            except Exception:
+                                logger.exception(
+                                    "failed to restore plugin cache after install failure"
+                                )
                         sys.modules.update(modules)
                         if old is not None:
                             if moved_new and getattr(old, "inbound", None):
@@ -1100,21 +1075,18 @@ class PluginManager:
         archive: Path,
         *,
         force: bool = False,
-        persist_enabled: bool = False,
         expect_id: str | None = None,
         expect_version: str | None = None,
+        persist_enabled: bool = False,
     ) -> LoadedPlugin:
-        """Install a plugin from a local ZIP archive.
-
-        The archive must contain exactly one plugin directory (at the zip root
-        or in a single top-level folder) with a ``plugin.yaml`` manifest.
-        """
-        _assert_zip_magic(archive)
+        """Install a plugin from a bounded local ZIP archive."""
         try:
-            if archive.stat().st_size > _MAX_PLUGIN_ARCHIVE_BYTES:
-                raise _archive_error("plugin ZIP exceeds 100 MiB")
+            limit = min(MAX_ARCHIVE_BYTES, _MAX_PLUGIN_ARCHIVE_BYTES)
+            if archive.stat().st_size > limit:
+                raise _archive_error("plugin ZIP download exceeds the configured limit")
         except OSError as exc:
             raise _archive_error(f"cannot inspect plugin ZIP: {exc}") from exc
+        _assert_zip_magic(archive)
         with tempfile.TemporaryDirectory() as tmp:
             extract_to = Path(tmp) / "extract"
             extract_to.mkdir()
@@ -1129,6 +1101,7 @@ class PluginManager:
                         except ValueError as exc:
                             raise _archive_error("zip path traversal detected") from exc
                     total_written = 0
+                    extract_limit = min(MAX_EXTRACTED_BYTES, _MAX_PLUGIN_UNCOMPRESSED_BYTES)
                     for member in infos:
                         target = (extract_to / member.filename).resolve()
                         if member.is_dir():
@@ -1137,12 +1110,14 @@ class PluginManager:
                         target.parent.mkdir(parents=True, exist_ok=True)
                         with zf.open(member) as source, target.open("wb") as destination:
                             while True:
-                                chunk = source.read(1024 * 1024)
+                                chunk = source.read(64 * 1024)
                                 if not chunk:
                                     break
                                 total_written += len(chunk)
-                                if total_written > _MAX_PLUGIN_UNCOMPRESSED_BYTES:
-                                    raise _archive_error("plugin ZIP expands beyond 64 MiB")
+                                if total_written > extract_limit:
+                                    raise _archive_error(
+                                        "plugin ZIP expands beyond configured limits"
+                                    )
                                 destination.write(chunk)
             except OctopError:
                 raise
@@ -1152,7 +1127,6 @@ class PluginManager:
                     "file is not a valid ZIP archive",
                 ) from exc
 
-            # Support zip root being the plugin dir or containing one subdir
             candidates = [p for p in extract_to.iterdir() if (p / "plugin.yaml").is_file()]
             if not candidates and (extract_to / "plugin.yaml").is_file():
                 candidates = [extract_to]
@@ -1164,9 +1138,9 @@ class PluginManager:
             return self.install_path(
                 candidates[0],
                 force=force,
-                persist_enabled=persist_enabled,
                 expect_id=expect_id,
                 expect_version=expect_version,
+                persist_enabled=persist_enabled,
             )
 
     def install_url(
@@ -1174,22 +1148,42 @@ class PluginManager:
         url: str,
         *,
         force: bool = False,
-        persist_enabled: bool = False,
         expect_id: str | None = None,
         expect_version: str | None = None,
+        persist_enabled: bool = False,
     ) -> LoadedPlugin:
         resolved = normalize_plugin_download_url(url)
         _assert_http_url(resolved)
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / "plugin.zip"
-            _download_plugin_archive(resolved, archive)
+            try:
+                download(resolved, archive, max_bytes=_MAX_PLUGIN_ARCHIVE_BYTES)
+            except urllib.error.HTTPError as exc:
+                raise OctopError(
+                    ErrorCode.PLUGIN_INSTALL_FAILED,
+                    f"download failed with HTTP {exc.code}",
+                    details={"reason": f"HTTP {exc.code}"},
+                ) from exc
+            except urllib.error.URLError as exc:
+                reason = getattr(exc, "reason", None) or str(exc)
+                raise OctopError(
+                    ErrorCode.PLUGIN_INSTALL_FAILED,
+                    f"download failed: {reason}",
+                    details={"reason": str(reason)},
+                ) from exc
+            except (OSError, ValueError) as exc:
+                raise OctopError(
+                    ErrorCode.PLUGIN_INSTALL_FAILED,
+                    f"download failed: {exc}",
+                    details={"reason": str(exc)},
+                ) from exc
             try:
                 return self.install_archive(
                     archive,
                     force=force,
-                    persist_enabled=persist_enabled,
                     expect_id=expect_id,
                     expect_version=expect_version,
+                    persist_enabled=persist_enabled,
                 )
             except OctopError as exc:
                 if exc.code is not ErrorCode.PLUGIN_INVALID_ARCHIVE:

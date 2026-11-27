@@ -174,6 +174,7 @@ interface ChannelDrawerProps {
   editing: ChannelRow | null;
   loadingConfig: boolean;
   initialValues: ChannelFormValues | undefined;
+  secretsSet?: string[];
   form: FormInstance<ChannelFormValues>;
   saving: boolean;
   onDelete?: () => void;
@@ -197,29 +198,35 @@ export function FormItemForField({
   disabled = false,
   editing = false,
   channelKind,
+  secretKept = false,
 }: {
   field: ChannelField;
   editing?: boolean;
   disabled?: boolean;
   channelKind?: string;
+  /** Stored secret stays on the server; an empty field means keep it. */
+  secretKept?: boolean;
 }) {
   const { t } = useTranslation();
   const label = field.label.startsWith("channels.")
     ? t(field.label)
     : field.label;
+  const isBuiltinHelp = Boolean(field.helpKey?.startsWith("channels."));
   const help = field.helpKey ? t(field.helpKey) : undefined;
-  const fieldLabel = help ? (
-    <span>
-      {label}{" "}
-      <Tooltip title={help}>
-        <span role="img" aria-label={`${label}: ?`} tabIndex={0}>
-          <CircleHelp size={14} style={{ verticalAlign: "middle" }} />
-        </span>
-      </Tooltip>
-    </span>
-  ) : (
-    label
-  );
+  const extra = isBuiltinHelp ? help : undefined;
+  const fieldLabel =
+    help && !isBuiltinHelp ? (
+      <span>
+        {label}{" "}
+        <Tooltip title={help}>
+          <span role="img" aria-label={`${label}: ?`} tabIndex={0}>
+            <CircleHelp size={14} style={{ verticalAlign: "middle" }} />
+          </span>
+        </Tooltip>
+      </span>
+    ) : (
+      label
+    );
   const initialValue = editing ? field.legacyDefaultValue : field.defaultValue;
   if (field.type === "select") {
     const optionPrefix = field.optionLabelPrefix ?? "channels.telegram_option_";
@@ -228,6 +235,7 @@ export function FormItemForField({
         name={field.name}
         label={fieldLabel}
         initialValue={initialValue}
+        extra={extra}
       >
         <Select
           disabled={disabled}
@@ -246,6 +254,7 @@ export function FormItemForField({
         label={fieldLabel}
         initialValue={initialValue}
         valuePropName="checked"
+        extra={extra}
       >
         <Switch disabled={disabled} />
       </Form.Item>
@@ -257,14 +266,15 @@ export function FormItemForField({
       : field.type === "textarea" || field.type === "json"
       ? Input.TextArea
       : Input;
-  const rules: Rule[] = field.required
-    ? [
-        {
-          required: true,
-          message: t("channels.fieldRequired", { label }),
-        },
-      ]
-    : [];
+  const rules: Rule[] =
+    field.required && !(secretKept && field.type === "password")
+      ? [
+          {
+            required: true,
+            message: t("channels.fieldRequired", { label }),
+          },
+        ]
+      : [];
   if (field.type === "json") {
     rules.push({
       validator: async (_: unknown, value: unknown) => {
@@ -302,10 +312,14 @@ export function FormItemForField({
     });
   }
   return (
-    <Form.Item name={field.name} label={fieldLabel} rules={rules}>
+    <Form.Item name={field.name} label={fieldLabel} rules={rules} extra={extra}>
       <Input1
         disabled={disabled}
-        placeholder={field.placeholder}
+        placeholder={
+          secretKept && field.type === "password"
+            ? t("common.unchanged")
+            : field.placeholder
+        }
         {...(field.type === "textarea" || field.type === "json"
           ? { rows: 4 }
           : {})}
@@ -782,6 +796,7 @@ export function ChannelDrawer({
   testing,
   agentId,
   pluginChannelSettings = [],
+  secretsSet = [],
 }: ChannelDrawerProps) {
   const { t } = useTranslation();
   const allowAllChannels = Form.useWatch("allow_all_channels", form) !== false;
@@ -2149,7 +2164,7 @@ export function ChannelDrawer({
   // ── Render ──────────────────────────────────────────────────────────────
   return (
     <Drawer
-      width={460}
+      width={520}
       placement="right"
       title={
         <div className={styles.drawerTitle}>
@@ -2378,6 +2393,7 @@ export function ChannelDrawer({
                       field={f}
                       editing={isEdit}
                       channelKind={selectedKind}
+                      secretKept={secretsSet.includes(f.name)}
                       disabled={
                         ((selectedKind === "discord" ||
                           selectedKind === "slack") &&
