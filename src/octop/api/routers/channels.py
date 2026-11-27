@@ -27,6 +27,7 @@ from octop.infra.gateway.bot_creators.feishu_runner import extract_feishu_creden
 from octop.infra.gateway.channels import dingtalk_registration, qr_bind
 from octop.infra.gateway.gateway import ChannelKind
 from octop.infra.utils.locale import DEFAULT_LOCALE, resolve_request_locale
+from octop.infra.utils.secret_fields import merge_blank_secrets, redact_mapping
 from octop.infra.utils.subprocess_io import parse_subprocess_json_lines
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ class ChannelPatchBody(BaseModel):
 class ChannelProbeBody(BaseModel):
     kind: _ChannelKindField
     config: dict[str, Any] = {}
+    channel_id: str | None = None
 
 
 class FeishuBotCreatorStartBody(BaseModel):
@@ -130,14 +132,43 @@ def _row_to_dict(
     return out
 
 
+def _load_channel_config(raw: str | None) -> dict[str, Any]:
+    try:
+        parsed = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _plugin_secret_names(kind: str) -> set[str]:
+    """Password fields declared by a channel plugin, in addition to known names."""
+    from octop.infra.gateway.plugin_channels import plugin_channel_kinds
+
+    names: set[str] = set()
+    for info in plugin_channel_kinds():
+        if info.kind != kind:
+            continue
+        for spec in info.fields:
+            if not isinstance(spec, dict):
+                continue
+            if spec.get("type") == "password" or spec.get("secret") is True:
+                name = str(spec.get("name") or "").strip()
+                if name:
+                    names.add(name)
+    return names
+
+
+def _public_channel_config(kind: str, raw: str | None) -> tuple[dict[str, Any], list[str]]:
+    return redact_mapping(_load_channel_config(raw), extra_keys=_plugin_secret_names(kind))
+
+
 def _row_to_detail(
     r: Any, *, gateway: Any | None = None, locale: Any = DEFAULT_LOCALE
 ) -> dict[str, Any]:
     detail = _row_to_dict(r, gateway=gateway, locale=locale)
-    try:
-        detail["config"] = json.loads(r.config_json or "{}")
-    except json.JSONDecodeError:
-        detail["config"] = {}
+    config, secrets_set = _public_channel_config(str(r.kind), r.config_json)
+    detail["config"] = config
+    detail["secrets_set"] = secrets_set
     return detail
 
 
@@ -256,11 +287,19 @@ async def patch_channel(
     existing = server.app_runtime.gateway.get_channel(channel_id)
     if existing is None or existing.agent_id != agent_id:
         raise OctopError(ErrorCode.NOT_FOUND, "channel not found")
+    config = body.config
+    if config is not None:
+        kind = str(body.kind) if body.kind is not None else str(existing.kind)
+        config = merge_blank_secrets(
+            config,
+            _load_channel_config(existing.config_json),
+            extra_keys=_plugin_secret_names(kind),
+        )
     row = await server.app_runtime.gateway.update_channel(
         channel_id,
         kind=str(body.kind) if body.kind is not None else None,
         name=body.name,
-        config_json=json.dumps(body.config) if body.config is not None else None,
+        config_json=json.dumps(config) if config is not None else None,
         enabled=int(body.enabled) if body.enabled is not None else None,
     )
     return _row_to_dict(
@@ -314,14 +353,28 @@ async def probe_channel_config(
     user: Any = Depends(require_permission("channels")),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
-    """Probe channel credentials from a draft config (no save required)."""
+    """Probe channel credentials from a draft config (no save required).
+
+    A blank secret reuses the value stored on ``channel_id``. Stored secrets
+    are not included in the response.
+    """
     _require_agent_access(agent_id, user=user, as_user=as_user, server=server)
+    config = dict(body.config)
+    if body.channel_id:
+        row = server.app_runtime.gateway.get_channel(body.channel_id)
+        if row is None or row.agent_id != agent_id:
+            raise OctopError(ErrorCode.NOT_FOUND, "channel not found")
+        config = merge_blank_secrets(
+            config,
+            _load_channel_config(row.config_json),
+            extra_keys=_plugin_secret_names(str(body.kind)),
+        )
     return cast(
         dict[str, Any],
         await server.app_runtime.gateway.probe_config(
             agent_id=agent_id,
             kind=str(body.kind),
-            config=body.config,
+            config=config,
             locale=resolve_request_locale(request),
         ),
     )
@@ -1154,13 +1207,12 @@ async def whatsapp_bridge_qrcode_generate(
     from octop_gateway.channels.whatsapp import fetch_whatsapp_bridge_qr  # noqa: PLC0415
 
     try:
-        res = await fetch_whatsapp_bridge_qr(
+        return await fetch_whatsapp_bridge_qr(
             body.bridge_url,
             provider=body.provider,
             session_name=body.session_name,
             api_key=body.bridge_api_key,
         )
-        return dict(res)
     except Exception as exc:
         logger.warning("Failed to fetch WhatsApp bridge QR code for agent %s: %s", agent_id, exc)
         raise HTTPException(
@@ -1181,13 +1233,12 @@ async def whatsapp_bridge_qrcode_poll(
     from octop_gateway.channels.whatsapp import check_whatsapp_bridge_status  # noqa: PLC0415
 
     try:
-        res = await check_whatsapp_bridge_status(
+        return await check_whatsapp_bridge_status(
             body.bridge_url,
             provider=body.provider,
             session_name=body.session_name,
             api_key=body.bridge_api_key,
         )
-        return dict(res)
     except Exception as exc:
         logger.warning("Failed to poll WhatsApp bridge status for agent %s: %s", agent_id, exc)
         raise HTTPException(
@@ -1212,12 +1263,12 @@ async def whatsapp_webhook_verify(
     hub_challenge: str = Query(default="", alias="hub.challenge"),
     server: Any = Depends(get_server),
 ) -> PlainTextResponse:
-    """Verify Meta WhatsApp Business Cloud API webhook subscription challenge."""
+    """Verify Meta WhatsApp Cloud API GET webhook subscription challenge."""
     channel = _resolve_live_webhook_channel(server, channel_id, "whatsapp")
-    verify_fn = getattr(channel, "verify_webhook_challenge", None)
+    verifier = getattr(channel, "verify_webhook_challenge", None)
     challenge = (
-        verify_fn(hub_mode, hub_verify_token, hub_challenge, require_token=True)
-        if callable(verify_fn)
+        verifier(hub_mode, hub_verify_token, hub_challenge, require_token=True)
+        if callable(verifier)
         else None
     )
     if challenge is None:
@@ -1231,7 +1282,7 @@ async def whatsapp_webhook_ingest(
     request: Request,
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
-    """Ingest inbound webhook events from Meta WhatsApp Cloud API, WAHA, or Evolution API."""
+    """Ingest inbound WhatsApp webhook events (Meta Cloud API, WAHA, or Evolution API)."""
     channel = _resolve_live_webhook_channel(server, channel_id, "whatsapp")
     raw_body = await request.body()
     verify_req = getattr(channel, "verify_webhook_request", None)
@@ -1240,17 +1291,19 @@ async def whatsapp_webhook_ingest(
             raise HTTPException(status_code=403, detail="Invalid WhatsApp webhook authentication")
     else:
         sig_header = request.headers.get("X-Hub-Signature-256", "")
-        verify_sig = getattr(channel, "verify_webhook_signature", None)
-        if not callable(verify_sig) or not verify_sig(sig_header, raw_body, require_secret=True):
-            raise HTTPException(status_code=403, detail="Invalid X-Hub-Signature-256")
+        sig_verifier = getattr(channel, "verify_webhook_signature", None)
+        if not callable(sig_verifier) or not sig_verifier(
+            sig_header, raw_body, require_secret=True
+        ):
+            raise HTTPException(status_code=403, detail="Invalid WhatsApp webhook signature")
 
     try:
         payload = json.loads(raw_body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
 
-    extract_fn = getattr(channel, "extract_webhook_messages", None)
-    events = extract_fn(payload) if callable(extract_fn) else []
+    extractor = getattr(channel, "extract_webhook_messages", None)
+    events = extractor(payload) if callable(extractor) else []
     for ev in events:
         if hasattr(channel, "note_inbound"):
             channel.note_inbound()
@@ -1264,23 +1317,25 @@ async def slack_webhook_ingest(
     request: Request,
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
-    """Ingest Slack HTTP Events API webhooks (url_verification & event_callback)."""
+    """Ingest Slack HTTP Events API webhooks (url_verification + event_callback)."""
     channel = _resolve_live_webhook_channel(server, channel_id, "slack")
     raw_body = await request.body()
     timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
     signature = request.headers.get("X-Slack-Signature", "")
-    verify_sig = getattr(channel, "verify_signature", None)
-    if not callable(verify_sig) or not verify_sig(
+    sig_verifier = getattr(channel, "verify_signature", None)
+    if not callable(sig_verifier) or not sig_verifier(
         timestamp, signature, raw_body, require_secret=True
     ):
-        raise HTTPException(status_code=403, detail="Invalid Slack signature")
+        raise HTTPException(status_code=403, detail="Invalid Slack webhook signature")
 
     try:
         payload = json.loads(raw_body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
 
-    handle_fn = getattr(channel, "handle_webhook_payload", None)
-    if callable(handle_fn) and isinstance(payload, dict):
-        return cast(dict[str, Any], handle_fn(payload))
+    handler = getattr(channel, "handle_webhook_payload", None)
+    if callable(handler):
+        challenge_resp = handler(payload)
+        if challenge_resp is not None:
+            return cast(dict[str, Any], challenge_resp)
     return {"ok": True}

@@ -145,6 +145,7 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
     loadingKey: null,
     results: {},
   });
+  const [secretsSet, setSecretsSet] = useState<string[]>([]);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<ChannelRow | null>(null);
@@ -279,6 +280,7 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
           ? { group_context: defaultGroupContextConfigForKind(kind) }
           : {}),
       };
+      setSecretsSet([]);
       setDrawerInitialValues(defaults);
       form.resetFields();
       form.setFieldsValue(defaults);
@@ -290,6 +292,7 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
   const openEdit = useCallback(
     async (row: ChannelRow) => {
       setEditing(row);
+      setSecretsSet([]);
       setLoadingConfig(true);
       const baseValues: ChannelFormValues = {
         kind: row.kind as ChannelKey,
@@ -303,9 +306,28 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
       const detail = await getChannel(row.id);
       if (detail) {
         const cfg = detail.config ?? {};
+        const kept = new Set(detail.secrets_set ?? []);
+        const passwordNames = new Set(
+          (CHANNEL_FIELDS[row.kind as ChannelKey] ?? [])
+            .filter((field) => field.type === "password")
+            .map((field) => field.name),
+        );
+        for (const name of passwordNames) {
+          const value = cfg[name];
+          if (typeof value === "string" && value.trim()) kept.add(name);
+        }
+        // Stored QQ rows may name the credential client_secret (CLI-created
+        // rows) while the form field is secret. The redacted config no longer
+        // carries the value, so alias from secrets_set instead.
+        if (row.kind === "qq" && kept.has("client_secret")) {
+          kept.add("secret");
+        }
+        setSecretsSet([...kept]);
         const formCfg: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(cfg)) {
           if (v === undefined || v === null) continue;
+          if (kept.has(k) || passwordNames.has(k) || k === "client_secret")
+            continue;
           if (row.kind === "qq" && k === "show_progress") continue;
           if (
             CHANNEL_DISPLAY_CONFIG_KEYS.includes(
@@ -343,13 +365,6 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
           else formCfg[k] = JSON.stringify(v);
         }
         if (
-          row.kind === "qq" &&
-          typeof formCfg.client_secret === "string" &&
-          !formCfg.secret
-        ) {
-          formCfg.secret = formCfg.client_secret;
-        }
-        if (
           GROUP_POLICY_CHANNELS.includes(row.kind as ChannelKey) &&
           !formCfg.group_context
         ) {
@@ -380,7 +395,13 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
           ...(row.kind === "discord"
             ? { allow_all_channels: cfg.allow_all_channels !== false }
             : {}),
-          __raw_config: JSON.stringify(cfg, null, 2),
+          __raw_config: JSON.stringify(
+            Object.fromEntries(
+              Object.entries(cfg).filter(([key]) => !kept.has(key)),
+            ),
+            null,
+            2,
+          ),
         };
         setDrawerInitialValues(next);
         form.setFieldsValue(next);
@@ -526,7 +547,7 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
       return;
     }
     setTestState((prev) => ({ ...prev, loadingKey: kind }));
-    const result = await probeChannelConfig(kind, config);
+    const result = await probeChannelConfig(kind, config, editing?.id);
     setTestState((prev) => ({
       loadingKey: null,
       results: { ...prev.results, [kind]: result },
@@ -622,6 +643,7 @@ export default function ChannelsPanel({ agentId }: ChannelsPanelProps) {
         editing={editing}
         loadingConfig={loadingConfig}
         initialValues={drawerInitialValues}
+        secretsSet={secretsSet}
         form={form}
         saving={saving}
         deleting={deleting}

@@ -29,6 +29,17 @@ def test_webhook_paths_are_jwt_exempt() -> None:
     assert is_jwt_exempt_path("/api/channels/webhook/slack/ch-1") is True
 
 
+def test_whatsapp_bridge_qr_body_rejects_non_http_url() -> None:
+    from pydantic import ValidationError
+
+    from octop.api.routers.channels import WhatsAppBridgeQrBody
+
+    valid = WhatsAppBridgeQrBody(bridge_url="http://127.0.0.1:3000")
+    assert valid.bridge_url == "http://127.0.0.1:3000"
+    with pytest.raises(ValidationError):
+        WhatsAppBridgeQrBody(bridge_url="file:///etc/passwd")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("channel_type", ["slack", "whatsapp", "discord", "feishu", "wecom"])
 async def test_quote_context_injected_for_new_and_enhanced_channels(channel_type: str) -> None:
@@ -50,12 +61,8 @@ async def test_quote_context_injected_for_new_and_enhanced_channels(channel_type
 
 @pytest.mark.asyncio
 async def test_slack_and_whatsapp_gateway_registration_and_webhooks(tmp_path, monkeypatch) -> None:
-    slack_mod = pytest.importorskip("octop_gateway.channels.slack")
-    wa_mod = pytest.importorskip("octop_gateway.channels.whatsapp")
-    SlackChannel = slack_mod.SlackChannel
-    SlackConfig = slack_mod.SlackConfig
-    WhatsAppChannel = wa_mod.WhatsAppChannel
-    WhatsAppConfig = wa_mod.WhatsAppConfig
+    from octop_gateway.channels.slack import SlackChannel, SlackConfig
+    from octop_gateway.channels.whatsapp import WhatsAppChannel, WhatsAppConfig
     from octop_gateway.manager import ChannelManager
     from octop_gateway.media import FileSystemMediaBackend
 
@@ -188,9 +195,6 @@ async def test_slack_and_whatsapp_gateway_registration_and_webhooks(tmp_path, mo
 
         # Fail-closed when webhook secrets are unconfigured
         from fastapi import HTTPException
-        from pydantic import ValidationError
-
-        from octop.api.routers.channels import WhatsAppBridgeQrBody
 
         no_sec_slack = SlackChannel(
             processor,
@@ -225,9 +229,6 @@ async def test_slack_and_whatsapp_gateway_registration_and_webhooks(tmp_path, mo
         with pytest.raises(HTTPException) as exc_wa_post:
             await whatsapp_webhook_ingest("wa-nosec", wa_req, server=fake_server)
         assert exc_wa_post.value.status_code == 403
-
-        with pytest.raises(ValidationError):
-            WhatsAppBridgeQrBody(bridge_url="file:///etc/passwd")
     finally:
         await manager.stop()
 
@@ -264,13 +265,11 @@ async def test_whatsapp_webhook_route_fails_closed_without_extractor(tmp_path) -
 
 @pytest.mark.asyncio
 async def test_whatsapp_webhook_route_enforces_account_binding_and_rejects_normalized_payloads(
-    tmp_path, monkeypatch
+    tmp_path,
 ) -> None:
     """Route-level regression test: missing/mismatched accounts and pre-normalized payloads are rejected before
     identity updates, deduplication, or enqueueing across Cloud API, WAHA, and Evolution API."""
-    wa_mod = pytest.importorskip("octop_gateway.channels.whatsapp")
-    WhatsAppChannel = wa_mod.WhatsAppChannel
-    WhatsAppConfig = wa_mod.WhatsAppConfig
+    from octop_gateway.channels.whatsapp import WhatsAppChannel, WhatsAppConfig
 
     async def processor(msg):
         yield MessageEvent.completed()
@@ -319,14 +318,14 @@ async def test_whatsapp_webhook_route_enforces_account_binding_and_rejects_norma
     gateway._channel_manager = SimpleNamespace(get_channel=lambda cid: channels.get(cid))
     fake_server = SimpleNamespace(app_runtime=SimpleNamespace(gateway=gateway))
 
-    def _signed_cloud_req(payload: dict[str, Any]) -> SimpleNamespace:
+    def _signed_cloud_req(payload: dict[str, object]) -> SimpleNamespace:
         raw = json.dumps(payload).encode("utf-8")
         sig = "sha256=" + hmac.new(b"shared_sec", raw, hashlib.sha256).hexdigest()
         return SimpleNamespace(
             headers={"X-Hub-Signature-256": sig}, body=AsyncMock(return_value=raw)
         )
 
-    def _bridge_req(payload: dict[str, Any], header_name: str = "X-Api-Key") -> SimpleNamespace:
+    def _bridge_req(payload: dict[str, object], header_name: str = "X-Api-Key") -> SimpleNamespace:
         raw = json.dumps(payload).encode("utf-8")
         return SimpleNamespace(
             headers={header_name: "shared_key"}, body=AsyncMock(return_value=raw)
